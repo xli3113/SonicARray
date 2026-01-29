@@ -3,6 +3,7 @@ using UnityEngine;
 
 public class SpatialSource : MonoBehaviour {
     [Header("OSC Settings")]
+    public bool enableOSC = false; // 是否启用 OSC 发送（无后端时可禁用）
     public string oscIP = "127.0.0.1";
     public int oscPort = 7000;
     public float updateRate = 60.0f; // Updates per second
@@ -20,8 +21,17 @@ public class SpatialSource : MonoBehaviour {
     private float lastUpdateTime = 0f;
     
     void Start() {
-        // Initialize OSC client
-        oscClient = new OSCClient(oscIP, oscPort);
+        // Initialize OSC client (only if enabled)
+        if (enableOSC) {
+            oscClient = new OSCClient(oscIP, oscPort);
+            #if UNITY_EDITOR
+            Debug.Log($"[SpatialSource] OSC 已启用，目标: {oscIP}:{oscPort}");
+            #endif
+        } else {
+            #if UNITY_EDITOR
+            Debug.Log("[SpatialSource] OSC 已禁用（无后端模式）");
+            #endif
+        }
         
         // Find SpeakerManager
         speakerManager = FindObjectOfType<SpeakerManager>();
@@ -45,9 +55,24 @@ public class SpatialSource : MonoBehaviour {
         sphere.transform.localScale = Vector3.one * sourceScale;
         
         Renderer renderer = sphere.GetComponent<Renderer>();
-        if (renderer != null && sourceMaterial != null) {
-            renderer.material = sourceMaterial;
+        if (renderer != null) {
+            if (sourceMaterial != null) {
+                renderer.material = sourceMaterial;
+            } else {
+                // 如果没有设置材质，创建默认黄色材质
+                Material defaultMat = new Material(Shader.Find("Standard"));
+                defaultMat.color = new Color(1f, 0.8f, 0.2f); // 黄色
+                renderer.material = defaultMat;
+                
+                #if UNITY_EDITOR
+                Debug.LogWarning("[SpatialSource] Source Material 未设置，使用默认黄色材质");
+                #endif
+            }
         }
+        
+        #if UNITY_EDITOR
+        Debug.Log($"[SpatialSource] 声源小球已创建，位置: {transform.position}, 大小: {sourceScale}");
+        #endif
         
         // Keep collider for interaction (will be used by grab system)
         // Don't destroy it here
@@ -97,11 +122,13 @@ public class SpatialSource : MonoBehaviour {
     }
     
     void SendOSCPosition() {
+        if (!enableOSC || oscClient == null) return;
+        
         Vector3 pos = transform.position;
         oscClient.Send("/spatial/source_pos", pos.x, pos.y, pos.z);
         
-        // 调试日志（仅在 Editor 中显示）
-        #if UNITY_EDITOR
+        // 调试日志（仅在 Editor 中显示，且仅在启用详细日志时）
+        #if UNITY_EDITOR && false  // 设置为 true 可启用详细 OSC 日志
         Debug.Log($"[OSC] 发送位置: ({pos.x:F2}, {pos.y:F2}, {pos.z:F2})");
         #endif
     }
@@ -167,7 +194,8 @@ public class SpatialSource : MonoBehaviour {
             lineObj.transform.SetParent(transform);
             LineRenderer lr = lineObj.AddComponent<LineRenderer>();
             lr.material = new Material(Shader.Find("Sprites/Default"));
-            lr.color = lineColor;
+            lr.startColor = lineColor;
+            lr.endColor = lineColor;
             lr.startWidth = lineWidth;
             lr.endWidth = lineWidth;
             lr.positionCount = 2;

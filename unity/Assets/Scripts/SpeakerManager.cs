@@ -22,11 +22,14 @@ public class SpeakerManager : MonoBehaviour {
     public Material activeMaterial;
     
     [Header("Visual Settings")]
-    public float speakerScale = 0.1f;
+    [Tooltip("扬声器长方体整体缩放，调大可让长方体更明显")]
+    public float speakerScale = 0.5f;
+    [Tooltip("是否显示数字标签，取消勾选则只显示长方体")]
     public bool showLabels = true;
     
     [Header("Speaker Visualization")]
-    public Vector3 speakerBaseSize = new Vector3(0.15f, 0.1f, 0.15f); // 长方体基础尺寸 (宽, 高, 深)
+    [Tooltip("长方体基础尺寸 (宽, 高, 深)，与 speakerScale 相乘得到最终大小")]
+    public Vector3 speakerBaseSize = new Vector3(0.2f, 0.15f, 0.2f);
     public float maxHeightMultiplier = 3.0f; // 激活时最大高度倍数
     public Material highlightMaterial; // 外层高亮材质（激活时显示）
     public float highlightThickness = 0.02f; // 外层高亮长方体厚度

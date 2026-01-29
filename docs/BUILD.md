@@ -4,22 +4,59 @@
 
 ### 1. C++ 后端
 
-#### Windows (Visual Studio)
+#### Windows（后端在 Windows 运行）
 
-1. 安装依赖：
-   - 下载 PortAudio: https://www.portaudio.com/download.html
-   - 解压到 `cpp/third_party/portaudio/`
-   - 下载 oscpack: `git clone https://github.com/RossBencina/oscpack.git cpp/third_party/oscpack`
+**1. 准备依赖（只需做一次）**
 
-2. 使用 CMake 生成 Visual Studio 项目：
-   ```powershell
-   cd cpp
+在项目根目录（`SonicARray`）下执行，把 **PortAudio** 和 **oscpack** 放到 `cpp/third_party/`，CMake 会一起编译 PortAudio，无需单独安装：
+
+```bash
+cd cpp
+mkdir -p third_party
+cd third_party
+git clone https://github.com/PortAudio/portaudio.git portaudio
+git clone https://github.com/RossBencina/oscpack.git oscpack
+cd ..
+```
+
+**2. 构建与运行**
+
+**方式一：Visual Studio**
+
+1. 安装 **Visual Studio 2019 或 2022**，并勾选 **“使用 C++ 的桌面开发”**。
+2. 打开 **“x64 本机工具命令提示符”**（开始菜单 → Visual Studio → x64 Native Tools Command Prompt），执行：
+   ```cmd
+   cd path\to\SonicARray\cpp
    mkdir build
    cd build
-   cmake .. -G "Visual Studio 17 2022"
+   cmake .. -G "Visual Studio 17 2022" -A x64
    ```
+   若用 VS 2019：`cmake .. -G "Visual Studio 16 2019" -A x64`
+3. 打开生成的 `SoundARray.sln`，选 **Release | x64**，生成解决方案。
+4. 运行后端：
+   ```cmd
+   Release\SoundARray.exe ..\..\speakers.yaml
+   ```
+   或在项目根目录有 `speakers.yaml` 时：`Release\SoundARray.exe speakers.yaml`（需把 `speakers.yaml` 复制到 `cpp/build` 或改路径）。
 
-3. 打开生成的 `SoundARray.sln`，编译运行
+**方式二：MinGW（Git Bash / MSYS2）**
+
+1. 安装 **MinGW-w64** 或 **MSYS2**，确保 `gcc`、`g++`、`make` 在 PATH。
+2. 在 **Git Bash** 或 **MSYS2 MinGW 64-bit** 中：
+   ```bash
+   cd cpp
+   rm -rf build
+   mkdir build && cd build
+   cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+   mingw32-make
+   ```
+3. 运行：
+   ```bash
+   ./SoundARray.exe ../speakers.yaml
+   ```
+   若 `speakers.yaml` 在项目根：`./SoundARray.exe ../../speakers.yaml`
+
+**说明**：PortAudio 已通过 `add_subdirectory` 随项目一起编译，无需单独下载预编译库；未安装 VS 时请用方式二（MinGW）。
 
 #### Linux
 
@@ -80,13 +117,18 @@ make
 
 ### 测试 C++ 后端
 
+**Linux / macOS / MinGW：**
 ```bash
-# 使用粉红噪声测试
 ./SoundARray speakers.yaml
-
-# 使用音频文件测试
 ./SoundARray speakers.yaml test_audio.wav
 ```
+
+**Windows (Visual Studio)：**
+```cmd
+Release\SoundARray.exe speakers.yaml
+Release\SoundARray.exe speakers.yaml test_audio.wav
+```
+（`speakers.yaml` 需在当前目录或写绝对路径；项目根目录的 `speakers.yaml` 会在配置时复制到 `build`。）
 
 ### 测试 Unity 连接
 

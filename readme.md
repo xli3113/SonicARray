@@ -19,7 +19,8 @@ SoundARray/
 │   ├── HOW_TO_ADD_NEW_ALGORITHM.md # 添加新算法
 │   └── PROJECT_STRUCTURE.md # 项目结构
 ├── tools/                   # 工具脚本
-│   └── test_osc_sender.py  # OSC 测试工具
+│   ├── test_osc_sender.py  # OSC 测试工具
+│   └── backend_meter.py    # 可视化 Meter（28 路电平条）
 ├── speakers.yaml           # 扬声器配置文件
 └── readme.md              # 本文档（项目入口）
 ```
@@ -49,10 +50,14 @@ SoundARray/
    ./configure && make
    ```
 
-2. **oscpack**: 下载 oscpack
+2. **oscpack** 与 **PortAudio**（推荐用子项目，Windows 也可用）：
    ```bash
-   git clone https://github.com/RossBencina/oscpack.git third_party/oscpack
+   cd cpp
+   mkdir -p third_party && cd third_party
+   git clone https://github.com/RossBencina/oscpack.git oscpack
+   git clone https://github.com/PortAudio/portaudio.git portaudio
    ```
+   之后 CMake 会一起编译 PortAudio，无需单独安装。
 
 #### 构建步骤
 ```bash
@@ -63,23 +68,49 @@ cmake ..
 make  # 或 Visual Studio 打开生成的 .sln
 ```
 
+**Windows 提示**：若在 Git Bash 中报错 `No CMAKE_C_COMPILER could be found`，请二选一：① 使用 **“x64 本机工具命令提示符”**（Visual Studio 菜单）再运行 `cmake ..`；② 使用 MinGW：`cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++`，然后 `mingw32-make`。详见 [docs/BUILD.md](docs/BUILD.md)。
+
 #### 运行
 ```bash
 ./SoundARray [speakers.yaml] [audio_file.wav]
 # 如果不提供音频文件，将使用粉红噪声
 ```
+**Windows (Visual Studio)**：在 `build` 目录下运行 `Release\SoundARray.exe speakers.yaml`（`speakers.yaml` 在项目根时可用 `..\..\speakers.yaml`）。
+
+#### 测试 Backend 与可视化 Meter
+
+- **命令行发 OSC**：`python tools/test_osc_sender.py [manual|line|circle|random]`
+- **可视化 Meter**：带 28 路电平条的 GUI，拖滑块发 OSC、看模拟增益  
+  ```bash
+  python tools/backend_meter.py
+  ```
+  依赖：Python 3 + tkinter（Windows/macOS 一般自带；Linux: `sudo apt install python3-tk`）
+
+详细说明见：[docs/后端测试与Meter.md](docs/后端测试与Meter.md)
 
 ### Unity 前端
 
-#### 设置步骤
+#### 快速开始（无 Meta XR SDK）
+
+**如果你没有 Meta Quest 或 Meta XR SDK，可以跳过 XR 相关步骤！**
+
+1. **打开 Unity 项目**：用 Unity Editor 打开 `unity` 文件夹
+2. **一键创建场景**：菜单栏选择 **SoundARray** → **Create Scene**，等待提示完成
+3. **测试**：点击 Play，在 Game 视图中用鼠标拖拽声源小球
+
+（也可按 [docs/从零创建Unity场景.md](docs/从零创建Unity场景.md) 手动创建场景。）
+
+#### 设置步骤（完整版）
+
 1. 创建新的 Unity 项目（Unity 2021.3+）
-2. 导入 Meta XR SDK (Oculus Integration)
+2. （可选）导入 Meta XR SDK (Oculus Integration) - **仅在有 Quest 时需要**
 3. 将 `unity/Assets/Scripts/` 中的脚本复制到 Unity 项目的 `Assets/Scripts/`
 4. 将 `speakers.yaml` 复制到 `Assets/StreamingAssets/`
 5. 创建场景：
    - 添加空 GameObject，附加 `SpeakerManager` 组件
    - 添加空 GameObject，附加 `SpatialSource` 组件
    - 配置 OSC IP 和端口（默认 127.0.0.1:7000）
+   - **详细步骤**：参考 [docs/从零创建Unity场景.md](docs/从零创建Unity场景.md)
 
 #### Meta XR SDK 集成
 在 `SpatialSource.cs` 中，需要根据你的 Meta XR SDK 版本调整抓取交互代码：
@@ -133,9 +164,32 @@ speakers:
 
 详细调试指南请参考：[docs/DEBUG_WITHOUT_QUEST.md](docs/DEBUG_WITHOUT_QUEST.md)
 
+### 🎮 无后端调试 Unity（推荐）
+
+**Unity 可视化部分完全独立于后端**，可以在没有后端的情况下运行！
+
+**快速步骤**：
+1. 在 Unity 中打开场景
+2. 选择 `SpatialSource` GameObject
+3. 在 Inspector 中**取消勾选 `Enable OSC`**（禁用 OSC）
+4. 点击 Play 运行场景
+5. 在 Game 视图中**用鼠标拖拽声源小球**测试
+
+**可以测试的功能**：
+- ✅ 扬声器可视化（28 个长方体）
+- ✅ 声源移动和可视化反馈
+- ✅ 扬声器高亮和高度动画
+- ✅ 连接线显示
+- ✅ 距离计算和增益估算
+
+**详细中文指南**：
+- [docs/无后端调试指南.md](docs/无后端调试指南.md) - 无后端调试说明
+- [docs/UNITY测试指南.md](docs/UNITY测试指南.md) - **完整的 Unity 测试步骤** ⭐
+
 **快速测试工具**：
 - `tools/test_osc_sender.py` - Python OSC 测试工具（用于测试 C++ 后端）
 - `unity/Assets/Scripts/EditorDebugHelper.cs` - Unity Editor 调试辅助脚本
+- `unity/Assets/Scripts/SimpleDrag.cs` - 鼠标拖拽脚本（Editor 模式自动启用）
 
 ## OSC 协议
 
