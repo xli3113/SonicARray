@@ -10,11 +10,19 @@
 #include <windows.h>
 #endif
 
+static void PauseBeforeExit() {
+#ifdef _WIN32
+    std::cout << "\nenter to exit\n";
+    std::cin.clear();
+    std::cin.get();
+#endif
+}
+
 void PrintActiveSpeakers(SpatialRenderer* renderer, const std::vector<Speaker>& speakers) {
     if (!renderer) return;
-    const std::vector<float>& gains = renderer->GetGains();
+    std::vector<float> gains = renderer->CopyGainsForSource(0);
     
-    std::cout << "\rActive Speakers: ";
+    std::cout << "\rspk: ";
     bool hasActive = false;
     
     for (size_t i = 0; i < gains.size(); ++i) {
@@ -33,9 +41,8 @@ void PrintActiveSpeakers(SpatialRenderer* renderer, const std::vector<Speaker>& 
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "=== SoundARray Audio Engine ===" << std::endl;
+    std::cout << "=== SoundARray ===" << std::endl;
     
-    // Load speaker configuration
     std::vector<Speaker> speakers;
     std::string yamlPath = "speakers.yaml";
     
@@ -44,49 +51,45 @@ int main(int argc, char* argv[]) {
     }
     
     if (!ConfigLoader::LoadSpeakers(yamlPath, speakers)) {
-        std::cerr << "Failed to load speaker configuration!" << std::endl;
+        std::cerr << "cant load speakers " << yamlPath << "\n";
+        PauseBeforeExit();
         return 1;
     }
     
     if (speakers.size() != 28) {
-        std::cerr << "Warning: Expected 28 speakers, got " << speakers.size() << std::endl;
+        std::cerr << "expected 28 spk got " << speakers.size() << "\n";
     }
     
-    // Initialize audio engine
     AudioEngine engine;
     if (!engine.Initialize(speakers)) {
-        std::cerr << "Failed to initialize audio engine!" << std::endl;
+        std::cerr << "engine init fail\n";
+        PauseBeforeExit();
         return 1;
     }
     
-    // Try to load audio file if provided
     if (argc > 2) {
         engine.LoadAudioFile(argv[2]);
     } else {
-        engine.EnablePinkNoise(true);
-        std::cout << "Using pink noise (provide audio file as second argument)" << std::endl;
+        engine.EnableSineWave(true);
+        std::cout << "sine wave (or pass wav as 2nd arg)\n";
     }
     
-    // Start engine
     if (!engine.Start()) {
-        std::cerr << "Failed to start audio engine!" << std::endl;
+        std::cerr << "start fail\n";
+        PauseBeforeExit();
         return 1;
     }
     
-    std::cout << "\nAudio engine running. Press Enter to exit..." << std::endl;
-    std::cout << "Waiting for OSC messages on /spatial/source_pos..." << std::endl;
+    std::cout << "\nrunning, enter to quit, osc /spatial/source_pos\n";
     
-    // Get renderer for debug output
     SpatialRenderer* renderer = engine.GetRenderer();
     
-    // Debug loop
     auto startTime = std::chrono::steady_clock::now();
     bool shouldExit = false;
     
     while (!shouldExit && engine.GetRenderer() != nullptr) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
-        // Print status every 500ms
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
         
@@ -95,20 +98,16 @@ int main(int argc, char* argv[]) {
             startTime = now;
         }
         
-        // Check for Enter key or Ctrl+C
         #ifdef _WIN32
         if (GetAsyncKeyState(VK_RETURN) & 0x8000) {
             shouldExit = true;
         }
-        #else
-        // On Linux, use standard input (non-blocking check)
-        // User can press Ctrl+C to exit, or we can add proper input handling
-        // For now, just let it run until interrupted
         #endif
     }
     
     engine.Stop();
     engine.Shutdown();
     
+    PauseBeforeExit();
     return 0;
 }

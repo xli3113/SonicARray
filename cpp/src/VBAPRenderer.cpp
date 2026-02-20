@@ -3,232 +3,48 @@
 #include <algorithm>
 #include <limits>
 #include <iostream>
+#include <unordered_set>
+#include <vector>
 
-VBAPRenderer::VBAPRenderer()
-    : smoothingTime_(0.05f) {
-}
+namespace {
+constexpr int kKNN = 10;
+constexpr float kAreaEps = 1e-6f;
+constexpr float kFeasEps = 1e-6f;
 
-bool VBAPRenderer::Initialize(const std::vector<Speaker>& speakers) {
-    speakers_ = speakers;
-    
-    if (speakers_.size() < 3) {
-        std::cerr << "VBAPRenderer: Need at least 3 speakers" << std::endl;
-        return false;
-    }
-    
-    rawGains_.resize(speakers_.size(), 0.0f);
-    smoothedGains_.resize(speakers_.size(), 0.0f);
-    
-    BuildTriangles();
-    
-    std::cout << "VBAPRenderer initialized with " << speakers_.size() << " speakers" << std::endl;
+bool Normalize3(float& x, float& y, float& z) {
+    float len = std::sqrt(x * x + y * y + z * z);
+    if (len <= 1e-6f) return false;
+    x /= len; y /= len; z /= len;
     return true;
 }
 
-VBAPRenderer::~VBAPRenderer() {
+struct Triple {
+    int a, b, c;
+    bool operator==(const Triple& o) const { return a == o.a && b == o.b && c == o.c; }
+};
+struct TripleHash {
+    size_t operator()(const Triple& t) const {
+        return size_t(t.a) * 31337u + size_t(t.b) * 31u + size_t(t.c);
+    }
+};
+
+float TriangleArea(float p1x, float p1y, float p1z,
+                   float p2x, float p2y, float p2z,
+                   float p3x, float p3y, float p3z) {
+    float v1x = p2x - p1x, v1y = p2y - p1y, v1z = p2z - p1z;
+    float v2x = p3x - p1x, v2y = p3y - p1y, v2z = p3z - p1z;
+    float cx = v1y * v2z - v1z * v2y;
+    float cy = v1z * v2x - v1x * v2z;
+    float cz = v1x * v2y - v1y * v2x;
+    return 0.5f * std::sqrt(cx * cx + cy * cy + cz * cz);
 }
 
-void VBAPRenderer::BuildTriangles() {
-    // For a 2D grid layout, build triangles from adjacent speakers
-    // This is a simplified approach - you may want to use Delaunay triangulation
-    // for more complex layouts
-    
-    triangles_.clear();
-    
-    if (speakers_.size() < 3) {
-        std::cerr << "Warning: Not enough speakers for VBAP (need at least 3)" << std::endl;
-        return;
-    }
-    
-    // Try to detect grid layout from speaker positions
-    // For now, use a simple approach: create triangles from grid neighbors
-    // Assuming speakers are arranged in a grid (you may need to adjust this)
-    // Based on the default speakers.yaml: 8 columns x 4 rows (28 speakers)
-    int gridWidth = 8; // Adjust based on your layout
-    int gridHeight = (speakers_.size() + gridWidth - 1) / gridWidth; // Round up
-    
-    // If speakers don't form a perfect grid, use distance-based triangulation
-    bool useGridLayout = (speakers_.size() == gridWidth * gridHeight || 
-                         speakers_.size() == gridWidth * gridHeight - (gridWidth * gridHeight - speakers_.size()));
-    
-    if (useGridLayout && gridHeight > 1) {
-        // Grid-based triangulation
-        for (int row = 0; row < gridHeight - 1; ++row) {
-            for (int col = 0; col < gridWidth - 1; ++col) {
-                int idx1 = row * gridWidth + col;
-                int idx2 = row * gridWidth + col + 1;
-                int idx3 = (row + 1) * gridWidth + col;
-                int idx4 = (row + 1) * gridWidth + col + 1;
-                
-                if (idx1 < static_cast<int>(speakers_.size()) && 
-                    idx2 < static_cast<int>(speakers_.size()) && 
-                    idx3 < static_cast<int>(speakers_.size())) {
-                    triangles_.push_back({idx1, idx2, idx3});
-                }
-                if (idx2 < static_cast<int>(speakers_.size()) && 
-                    idx3 < static_cast<int>(speakers_.size()) && 
-                    idx4 < static_cast<int>(speakers_.size())) {
-                    triangles_.push_back({idx2, idx3, idx4});
-                }
-            }
-        }
-    } else {
-        // Fallback: create triangles from nearest neighbors
-        // This is a simplified approach - for production, use Delaunay triangulation
-        for (size_t i = 0; i < speakers_.size(); ++i) {
-            // Find two nearest neighbors
-            float minDist1 = std::numeric_limits<float>::max();
-            float minDist2 = std::numeric_limits<float>::max();
-            int nearest1 = -1, nearest2 = -1;
-            
-            for (size_t j = 0; j < speakers_.size(); ++j) {
-                if (i == j) continue;
-                
-                float dx = speakers_[j].x - speakers_[i].x;
-                float dy = speakers_[j].y - speakers_[i].y;
-                float dz = speakers_[j].z - speakers_[i].z;
-                float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                
-                if (dist < minDist1) {
-                    minDist2 = minDist1;
-                    nearest2 = nearest1;
-                    minDist1 = dist;
-                    nearest1 = j;
-                } else if (dist < minDist2) {
-                    minDist2 = dist;
-                    nearest2 = j;
-                }
-            }
-            
-            if (nearest1 >= 0 && nearest2 >= 0) {
-                // Avoid duplicate triangles
-                bool exists = false;
-                for (const auto& tri : triangles_) {
-                    if ((tri[0] == static_cast<int>(i) && tri[1] == nearest1 && tri[2] == nearest2) ||
-                        (tri[0] == static_cast<int>(i) && tri[1] == nearest2 && tri[2] == nearest1) ||
-                        (tri[0] == nearest1 && tri[1] == static_cast<int>(i) && tri[2] == nearest2) ||
-                        (tri[0] == nearest1 && tri[1] == nearest2 && tri[2] == static_cast<int>(i)) ||
-                        (tri[0] == nearest2 && tri[1] == static_cast<int>(i) && tri[2] == nearest1) ||
-                        (tri[0] == nearest2 && tri[1] == nearest1 && tri[2] == static_cast<int>(i))) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) {
-                    triangles_.push_back({static_cast<int>(i), nearest1, nearest2});
-                }
-            }
-        }
-    }
-    
-    std::cout << "Built " << triangles_.size() << " triangles for VBAP" << std::endl;
-}
-
-void VBAPRenderer::UpdateSourcePosition(float x, float y, float z) {
-    ComputeVBAP(x, y, z);
-}
-
-void VBAPRenderer::ComputeVBAP(float x, float y, float z) {
-    // Reset gains
-    std::fill(rawGains_.begin(), rawGains_.end(), 0.0f);
-    
-    // Normalize source direction
-    float len = std::sqrt(x * x + y * y + z * z);
-    if (len < 0.0001f) {
-        return; // Source at origin, no gains
-    }
-    
-    float nx = x / len;
-    float ny = y / len;
-    float nz = z / len;
-    
-    // Find best triangle
-    int bestTriangle = FindBestTriangle(nx, ny, nz);
-    
-    if (bestTriangle >= 0) {
-        ComputeTriangleGains(bestTriangle, nx, ny, nz);
-    }
-}
-
-int VBAPRenderer::FindBestTriangle(float x, float y, float z) {
-    int bestTriangle = -1;
-    float maxDot = -1.0f;
-    
-    for (size_t i = 0; i < triangles_.size(); ++i) {
-        const auto& tri = triangles_[i];
-        if (tri.size() < 3) continue;
-        
-        // Get speaker positions
-        const Speaker& s1 = speakers_[tri[0]];
-        const Speaker& s2 = speakers_[tri[1]];
-        const Speaker& s3 = speakers_[tri[2]];
-        
-        // Compute triangle normal (simplified for 2D case)
-        float v1x = s2.x - s1.x;
-        float v1y = s2.y - s1.y;
-        float v1z = s2.z - s1.z;
-        
-        float v2x = s3.x - s1.x;
-        float v2y = s3.y - s1.y;
-        float v2z = s3.z - s1.z;
-        
-        // Cross product for normal
-        float nx = v1y * v2z - v1z * v2y;
-        float ny = v1z * v2x - v1x * v2z;
-        float nz = v1x * v2y - v1y * v2x;
-        
-        Normalize(nx, ny, nz);
-        
-        // Dot product with source direction
-        float dot = Dot(x, y, z, nx, ny, nz);
-        
-        if (dot > maxDot) {
-            maxDot = dot;
-            bestTriangle = i;
-        }
-    }
-    
-    return bestTriangle;
-}
-
-void VBAPRenderer::ComputeTriangleGains(int triangleIdx, float x, float y, float z) {
-    if (triangleIdx < 0 || triangleIdx >= static_cast<int>(triangles_.size())) {
-        return;
-    }
-    
-    const auto& tri = triangles_[triangleIdx];
-    if (tri.size() < 3) return;
-    
-    const Speaker& s1 = speakers_[tri[0]];
-    const Speaker& s2 = speakers_[tri[1]];
-    const Speaker& s3 = speakers_[tri[2]];
-    
-    // Build matrix L (loudspeaker base vectors)
-    float L[3][3] = {
-        {s1.x, s1.y, s1.z},
-        {s2.x, s2.y, s2.z},
-        {s3.x, s3.y, s3.z}
-    };
-    
-    // Normalize columns
-    for (int i = 0; i < 3; ++i) {
-        float len = std::sqrt(L[i][0] * L[i][0] + L[i][1] * L[i][1] + L[i][2] * L[i][2]);
-        if (len > 0.0001f) {
-            L[i][0] /= len;
-            L[i][1] /= len;
-            L[i][2] /= len;
-        }
-    }
-    
-    // Compute inverse matrix (simplified 3x3 inversion)
+bool SolveLg(float L[3][3], float px, float py, float pz, float& g1, float& g2, float& g3) {
     float det = L[0][0] * (L[1][1] * L[2][2] - L[2][1] * L[1][2]) -
                 L[0][1] * (L[1][0] * L[2][2] - L[2][0] * L[1][2]) +
                 L[0][2] * (L[1][0] * L[2][1] - L[2][0] * L[1][1]);
-    
-    if (std::abs(det) < 0.0001f) {
-        return; // Singular matrix
-    }
-    
+    if (std::fabs(det) < 1e-6f) return false;
+
     float invL[3][3];
     invL[0][0] = (L[1][1] * L[2][2] - L[2][1] * L[1][2]) / det;
     invL[0][1] = -(L[0][1] * L[2][2] - L[2][1] * L[0][2]) / det;
@@ -239,37 +55,240 @@ void VBAPRenderer::ComputeTriangleGains(int triangleIdx, float x, float y, float
     invL[2][0] = (L[1][0] * L[2][1] - L[2][0] * L[1][1]) / det;
     invL[2][1] = -(L[0][0] * L[2][1] - L[2][0] * L[0][1]) / det;
     invL[2][2] = (L[0][0] * L[1][1] - L[1][0] * L[0][1]) / det;
-    
-    // Compute gains: g = invL * p
-    float g1 = invL[0][0] * x + invL[0][1] * y + invL[0][2] * z;
-    float g2 = invL[1][0] * x + invL[1][1] * y + invL[1][2] * z;
-    float g3 = invL[2][0] * x + invL[2][1] * y + invL[2][2] * z;
-    
-    // Ensure non-negative gains
+
+    g1 = invL[0][0] * px + invL[0][1] * py + invL[0][2] * pz;
+    g2 = invL[1][0] * px + invL[1][1] * py + invL[1][2] * pz;
+    g3 = invL[2][0] * px + invL[2][1] * py + invL[2][2] * pz;
+    return true;
+}
+}
+
+VBAPRenderer::VBAPRenderer()
+    : smoothingTime_(0.05f) {
+}
+
+bool VBAPRenderer::Initialize(const std::vector<Speaker>& speakers) {
+    speakers_ = speakers;
+
+    if (speakers_.size() < 3) {
+        std::cerr << "need 3+ spk\n";
+        return false;
+    }
+
+    for (int b = 0; b < kBuf; ++b) {
+        for (int s = 0; s < kMaxSources; ++s) {
+            rawGainsBuf_[b][s].assign(speakers_.size(), 0.0f);
+        }
+    }
+    for (int s = 0; s < kMaxSources; ++s) rawIdx_[s].store(0);
+    smoothedGains_.resize(kMaxSources);
+    for (int s = 0; s < kMaxSources; ++s) {
+        smoothedGains_[s].assign(speakers_.size(), 0.0f);
+    }
+
+    BuildTriangles();
+
+    std::cout << "vbap " << speakers_.size() << " spk " << kMaxSources << " src\n";
+    return true;
+}
+
+VBAPRenderer::~VBAPRenderer() {
+}
+
+void VBAPRenderer::BuildTriangles() {
+    triangles_.clear();
+    if (speakers_.size() < 3) {
+        std::cerr << "not enough spk\n";
+        return;
+    }
+
+    const int n = static_cast<int>(speakers_.size());
+    std::unordered_set<Triple, TripleHash> seen;
+
+    for (int i = 0; i < n; ++i) {
+        std::vector<std::pair<float, int>> dists;
+        for (int j = 0; j < n; ++j) {
+            if (i == j) continue;
+            float dx = speakers_[j].x - speakers_[i].x;
+            float dy = speakers_[j].y - speakers_[i].y;
+            float dz = speakers_[j].z - speakers_[i].z;
+            float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            dists.emplace_back(d, j);
+        }
+        if (dists.empty()) continue;
+        std::partial_sort(dists.begin(), dists.begin() + std::min(kKNN, (int)dists.size()),
+                         dists.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        int kUse = std::min(kKNN, (int)dists.size());
+        for (int aj = 0; aj < kUse; ++aj) {
+            int j = dists[aj].second;
+            for (int ak = aj + 1; ak < kUse; ++ak) {
+                int k = dists[ak].second;
+                float area = TriangleArea(
+                    speakers_[i].x, speakers_[i].y, speakers_[i].z,
+                    speakers_[j].x, speakers_[j].y, speakers_[j].z,
+                    speakers_[k].x, speakers_[k].y, speakers_[k].z);
+                if (area < kAreaEps) continue;
+
+                int a = i, b = j, c = k;
+                if (a > b) std::swap(a, b);
+                if (b > c) std::swap(b, c);
+                if (a > b) std::swap(a, b);
+                if (!seen.insert({a, b, c}).second) continue;
+
+                triangles_.push_back({a, b, c});
+            }
+        }
+    }
+
+    std::cout << "built " << triangles_.size() << " tris\n";
+}
+
+void VBAPRenderer::UpdateSourcePosition(float x, float y, float z) {
+    UpdateSourcePosition(0, x, y, z);
+}
+
+void VBAPRenderer::UpdateSourcePosition(int sourceId, float x, float y, float z) {
+    if (sourceId < 0 || sourceId >= kMaxSources) return;
+    ComputeVBAP(sourceId, x, y, z);
+}
+
+const std::vector<float>& VBAPRenderer::GetGainsForSource(int sourceId) const {
+    static const std::vector<float> kEmpty;
+    if (sourceId < 0 || sourceId >= static_cast<int>(smoothedGains_.size())) return kEmpty;
+    return smoothedGains_[sourceId];
+}
+
+std::vector<float> VBAPRenderer::CopyGainsForSource(int sourceId) const {
+    if (sourceId < 0 || sourceId >= kMaxSources) return {};
+    int idx = rawIdx_[sourceId].load(std::memory_order_acquire);
+    return rawGainsBuf_[idx][sourceId];
+}
+
+void VBAPRenderer::ComputeVBAP(int sourceId, float x, float y, float z) {
+    int cur = rawIdx_[sourceId].load(std::memory_order_relaxed);
+    int back = 1 - cur;
+    auto& gains = rawGainsBuf_[back][sourceId];
+    std::fill(gains.begin(), gains.end(), 0.0f);
+
+    float nx = x, ny = y, nz = z;
+    if (!Normalize3(nx, ny, nz)) {
+        nx = 1.0f; ny = 0.0f; nz = 0.0f;
+    }
+
+    int bestTriangle = FindBestTriangle(nx, ny, nz);
+    if (bestTriangle >= 0) {
+        ComputeTriangleGains(sourceId, bestTriangle, nx, ny, nz, back);
+    }
+
+    bool allZero = true;
+    for (float g : gains) {
+        if (std::fabs(g) > 1e-6f) { allZero = false; break; }
+    }
+    if (allZero) {
+        /* fallback: no feasible triangle, pick nearest speaker */
+        int bestIdx = 0;
+        float maxDot = -2.0f;
+        for (size_t i = 0; i < speakers_.size(); ++i) {
+            float sx = speakers_[i].x;
+            float sy = speakers_[i].y;
+            float sz = speakers_[i].z;
+            if (!Normalize3(sx, sy, sz)) continue;
+            float d = Dot(nx, ny, nz, sx, sy, sz);
+            if (d > maxDot) {
+                maxDot = d;
+                bestIdx = static_cast<int>(i);
+            }
+        }
+        std::fill(gains.begin(), gains.end(), 0.0f);
+        gains[bestIdx] = 1.0f;
+        static int s_fallbackCount = 0;
+        if (++s_fallbackCount % 500 == 0) {
+            std::cerr << "fb spk" << bestIdx << " src" << sourceId << "\n";
+        }
+    }
+
+    rawIdx_[sourceId].store(back, std::memory_order_release);
+}
+
+int VBAPRenderer::FindBestTriangle(float x, float y, float z) {
+    int bestIdx = -1;
+    float bestScore = -1.0f;
+
+    for (size_t ti = 0; ti < triangles_.size(); ++ti) {
+        const auto& tri = triangles_[ti];
+        if (tri.size() < 3) continue;
+
+        float L[3][3] = {
+            {speakers_[tri[0]].x, speakers_[tri[0]].y, speakers_[tri[0]].z},
+            {speakers_[tri[1]].x, speakers_[tri[1]].y, speakers_[tri[1]].z},
+            {speakers_[tri[2]].x, speakers_[tri[2]].y, speakers_[tri[2]].z}
+        };
+        bool ok = true;
+        for (int r = 0; r < 3; ++r) {
+            if (!Normalize3(L[r][0], L[r][1], L[r][2])) { ok = false; break; }
+        }
+        if (!ok) continue;
+
+        float g1, g2, g3;
+        if (!SolveLg(L, x, y, z, g1, g2, g3)) continue;
+
+        if (g1 < -kFeasEps || g2 < -kFeasEps || g3 < -kFeasEps) continue;
+
+        float score = std::min(std::min(g1, g2), g3);
+        if (score > bestScore) {
+            bestScore = score;
+            bestIdx = static_cast<int>(ti);
+        }
+    }
+    return bestIdx;
+}
+
+void VBAPRenderer::ComputeTriangleGains(int sourceId, int triangleIdx, float x, float y, float z, int back) {
+    if (sourceId < 0 || sourceId >= kMaxSources) return;
+    if (triangleIdx < 0 || triangleIdx >= static_cast<int>(triangles_.size())) return;
+
+    std::vector<float>& gains = rawGainsBuf_[back][sourceId];
+    const auto& tri = triangles_[triangleIdx];
+    if (tri.size() < 3) return;
+
+    float L[3][3] = {
+        {speakers_[tri[0]].x, speakers_[tri[0]].y, speakers_[tri[0]].z},
+        {speakers_[tri[1]].x, speakers_[tri[1]].y, speakers_[tri[1]].z},
+        {speakers_[tri[2]].x, speakers_[tri[2]].y, speakers_[tri[2]].z}
+    };
+    bool ok = true;
+    for (int r = 0; r < 3; ++r) {
+        if (!Normalize3(L[r][0], L[r][1], L[r][2])) { ok = false; break; }
+    }
+    if (!ok) return;
+
+    float g1, g2, g3;
+    if (!SolveLg(L, x, y, z, g1, g2, g3)) return;
+
     g1 = std::max(0.0f, g1);
     g2 = std::max(0.0f, g2);
     g3 = std::max(0.0f, g3);
-    
-    // Normalize for power preservation
-    float sum = g1 + g2 + g3;
-    if (sum > 0.0001f) {
-        float norm = std::sqrt(g1 * g1 + g2 * g2 + g3 * g3);
-        g1 /= norm;
-        g2 /= norm;
-        g3 /= norm;
+
+    float norm = std::sqrt(g1 * g1 + g2 * g2 + g3 * g3);
+    if (norm > 1e-4f) {
+        g1 /= norm; g2 /= norm; g3 /= norm;
     }
-    
-    // Store gains
-    rawGains_[tri[0]] = g1;
-    rawGains_[tri[1]] = g2;
-    rawGains_[tri[2]] = g3;
+
+    gains[tri[0]] = g1;
+    gains[tri[1]] = g2;
+    gains[tri[2]] = g3;
 }
 
 void VBAPRenderer::UpdateSmoothing(float dt) {
     float alpha = dt / (smoothingTime_ + dt);
-    
-    for (size_t i = 0; i < smoothedGains_.size(); ++i) {
-        smoothedGains_[i] = alpha * rawGains_[i] + (1.0f - alpha) * smoothedGains_[i];
+
+    for (int s = 0; s < kMaxSources; ++s) {
+        int idx = rawIdx_[s].load(std::memory_order_acquire);
+        const auto& raw = rawGainsBuf_[idx][s];
+        for (size_t i = 0; i < smoothedGains_[s].size(); ++i) {
+            smoothedGains_[s][i] = alpha * raw[i] + (1.0f - alpha) * smoothedGains_[s][i];
+        }
     }
 }
 

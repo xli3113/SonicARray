@@ -6,11 +6,14 @@ OSC 测试发送工具
 使用方法:
     python3 test_osc_sender.py [模式]
 
+也可用 Pure Data: 打开 tools/test_osc_soundarray.pd
+
 模式:
     manual    - 手动输入位置（默认）
     circle    - 圆形运动
     line      - 直线运动
     random    - 随机位置
+    multi     - 多声源模式（同时发送 source 0,1,2 位置）
 """
 
 import socket
@@ -89,6 +92,18 @@ def line_mode(ip, port, start=(-2, 1.5, 2), end=(2, 1.5, 2), duration=5.0):
         print(f"发送: ({x:.2f}, {y:.2f}, {z:.2f}) - 进度: {t*100:.1f}%")
         time.sleep(0.1)
 
+def multi_mode(ip, port, duration=10.0):
+    """多声源模式：同时发送 3 个声源的位置 (sourceId, x, y, z)"""
+    print(f"多声源模式 - 发送 source 0, 1, 2，持续 {duration} 秒")
+    steps = int(duration * 10)
+    for i in range(steps):
+        t = i / steps
+        send_osc(ip, port, '/spatial/source_pos', 0, 2*math.cos(2*math.pi*t), 1.5, 2*math.sin(2*math.pi*t))
+        send_osc(ip, port, '/spatial/source_pos', 1, -2*math.cos(2*math.pi*t), 1.5, -2*math.sin(2*math.pi*t))
+        send_osc(ip, port, '/spatial/source_pos', 2, 0, 2.0, 1.5 + math.sin(4*math.pi*t))
+        print(f"[{i+1}/{steps}] 发送 3 个声源")
+        time.sleep(0.1)
+
 def random_mode(ip, port, count=20, bounds=((-2, 2), (0.5, 2.5), (0, 3))):
     """随机位置模式"""
     print(f"随机位置模式 - {count} 个随机位置")
@@ -123,9 +138,11 @@ def main():
             line_mode(ip, port)
         elif mode == 'random':
             random_mode(ip, port)
+        elif mode == 'multi':
+            multi_mode(ip, port)
         else:
             print(f"未知模式: {mode}")
-            print("可用模式: manual, circle, line, random")
+            print("可用模式: manual, circle, line, random, multi")
     except KeyboardInterrupt:
         print("\n中断")
     except Exception as e:

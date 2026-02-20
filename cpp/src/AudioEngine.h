@@ -20,20 +20,14 @@ public:
     void Stop();
     
     void SetSourcePosition(float x, float y, float z);
+    void SetSourcePosition(int sourceId, float x, float y, float z);
     
-    // Load audio file (mono WAV)
     bool LoadAudioFile(const std::string& filepath);
-    
-    // Generate pink noise if no file loaded
-    void EnablePinkNoise(bool enable) { usePinkNoise_ = enable; }
+    void EnableSineWave(bool enable) { useSineWave_ = enable; }
     
     int GetSampleRate() const { return sampleRate_; }
     int GetNumChannels() const { return numChannels_; }
-    
-    // Get renderer for debug output
     SpatialRenderer* GetRenderer() const { return renderer_.get(); }
-    
-    // Set renderer (for switching algorithms)
     void SetRenderer(std::unique_ptr<SpatialRenderer> renderer);
 
 private:
@@ -54,15 +48,12 @@ private:
     int sampleRate_;
     int numChannels_;
     
-    // Audio source
     std::vector<float> audioBuffer_;
     size_t audioBufferPos_;
-    bool usePinkNoise_;
+    bool useSineWave_;
+    float sinePhase_;
     
-    // Pink noise state
-    float pinkNoiseState_[7];
-    
-    float GeneratePinkNoise();
+    float GenerateSineWave();
     
     std::atomic<bool> running_;
 };

@@ -1,11 +1,12 @@
 #include "AudioEngine.h"
 #include "RendererFactory.h"
+#include "SimdUtils.h"
 #include <iostream>
 #include <fstream>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 
-// Simple WAV file reader (mono, 16-bit PCM)
 bool LoadWavFile(const std::string& filepath, std::vector<float>& buffer, int& sampleRate) {
     std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) {
@@ -15,22 +16,20 @@ bool LoadWavFile(const std::string& filepath, std::vector<float>& buffer, int& s
     char header[44];
     file.read(header, 44);
     
-    // Check RIFF header
     if (strncmp(header, "RIFF", 4) != 0 || strncmp(header + 8, "WAVE", 4) != 0) {
         return false;
     }
-    
-    // Read sample rate
-    sampleRate = *(int*)(header + 24);
-    
-    // Read data size
-    int dataSize = *(int*)(header + 40);
-    
-    // Read audio data (assuming 16-bit mono)
+
+    int32_t sr = 0;
+    int32_t dataSize = 0;
+    std::memcpy(&sr, header + 24, 4);
+    std::memcpy(&dataSize, header + 40, 4);
+    sampleRate = sr;
+    if (dataSize <= 0 || dataSize > 100000000) return false;
+
     std::vector<int16_t> intData(dataSize / 2);
     file.read((char*)intData.data(), dataSize);
     
-    // Convert to float
     buffer.resize(intData.size());
     for (size_t i = 0; i < intData.size(); ++i) {
         buffer[i] = intData[i] / 32768.0f;
@@ -42,12 +41,9 @@ bool LoadWavFile(const std::string& filepath, std::vector<float>& buffer, int& s
 AudioEngine::AudioEngine()
     : stream_(nullptr), oscReceiver_(nullptr),
       sampleRate_(44100), numChannels_(28), audioBufferPos_(0),
-      usePinkNoise_(true), running_(false) {
+      useSineWave_(true), running_(false) {
     
-    // Initialize pink noise state
-    for (int i = 0; i < 7; ++i) {
-        pinkNoiseState_[i] = 0.0f;
-    }
+    sinePhase_ = 0.0f;
 }
 
 AudioEngine::~AudioEngine() {
@@ -59,33 +55,40 @@ bool AudioEngine::Initialize(const std::vector<Speaker>& speakers, int sampleRat
     sampleRate_ = sampleRate;
     numChannels_ = static_cast<int>(speakers.size());
     
-    // Initialize PortAudio
     PaError err = Pa_Initialize();
     if (err != paNoError) {
-        std::cerr << "PortAudio initialization failed: " << Pa_GetErrorText(err) << std::endl;
+        std::cerr << "pa init fail\n";
         return false;
     }
     
-    // Create renderer using factory (default: VBAP)
     renderer_ = RendererFactory::Create(RendererFactory::Type::VBAP);
     if (!renderer_->Initialize(speakers_)) {
-        std::cerr << "Failed to initialize renderer!" << std::endl;
+        std::cerr << "renderer init fail\n";
         return false;
     }
-    std::cout << "Using renderer: " << renderer_->GetName() << std::endl;
+    std::cout << "renderer: " << renderer_->GetName() << "\n";
     
-    // Create OSC receiver
     oscReceiver_ = new OSCReceiver(7000);
-    oscReceiver_->SetPositionCallback([this](float x, float y, float z) {
-        this->SetSourcePosition(x, y, z);
+    oscReceiver_->SetMultiSourcePositionCallback([this](int sourceId, float x, float y, float z) {
+        this->SetSourcePosition(sourceId, x, y, z);
     });
     
-    // Open audio stream
     PaStreamParameters outputParams;
     outputParams.device = Pa_GetDefaultOutputDevice();
+    if (outputParams.device == paNoDevice) {
+        std::cerr << "no audio dev, osc only\n";
+        stream_ = nullptr;
+        return true;
+    }
+    const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(outputParams.device);
+    if (!devInfo) {
+        std::cerr << "bad dev info, osc only\n";
+        stream_ = nullptr;
+        return true;
+    }
     outputParams.channelCount = numChannels_;
     outputParams.sampleFormat = paFloat32;
-    outputParams.suggestedLatency = Pa_GetDeviceInfo(outputParams.device)->defaultLowOutputLatency;
+    outputParams.suggestedLatency = devInfo->defaultLowOutputLatency;
     outputParams.hostApiSpecificStreamInfo = nullptr;
     
     err = Pa_OpenStream(
@@ -100,12 +103,11 @@ bool AudioEngine::Initialize(const std::vector<Speaker>& speakers, int sampleRat
     );
     
     if (err != paNoError) {
-        std::cerr << "Failed to open audio stream: " << Pa_GetErrorText(err) << std::endl;
-        return false;
+        std::cerr << "cant open " << numChannels_ << "ch stream, osc/vbap still ok\n";
+        stream_ = nullptr;
+    } else {
+        std::cout << numChannels_ << "ch " << sampleRate_ << "hz\n";
     }
-    
-    std::cout << "Audio Engine initialized: " << numChannels_ << " channels, " 
-              << sampleRate_ << " Hz" << std::endl;
     
     return true;
 }
@@ -124,21 +126,18 @@ void AudioEngine::Shutdown() {
         oscReceiver_ = nullptr;
     }
     
-    // renderer_ 是 unique_ptr，会自动释放
     renderer_.reset();
     
     Pa_Terminate();
 }
 
 bool AudioEngine::Start() {
-    if (!stream_) {
-        return false;
-    }
-    
-    PaError err = Pa_StartStream(stream_);
-    if (err != paNoError) {
-        std::cerr << "Failed to start audio stream: " << Pa_GetErrorText(err) << std::endl;
-        return false;
+    if (stream_) {
+        PaError err = Pa_StartStream(stream_);
+        if (err != paNoError) {
+            std::cerr << "stream start fail\n";
+            return false;
+        }
     }
     
     if (oscReceiver_) {
@@ -146,7 +145,6 @@ bool AudioEngine::Start() {
     }
     
     running_ = true;
-    
     return true;
 }
 
@@ -159,17 +157,21 @@ void AudioEngine::Stop() {
 }
 
 void AudioEngine::SetSourcePosition(float x, float y, float z) {
+    SetSourcePosition(0, x, y, z);
+}
+
+void AudioEngine::SetSourcePosition(int sourceId, float x, float y, float z) {
     if (renderer_) {
-        renderer_->UpdateSourcePosition(x, y, z);
+        renderer_->UpdateSourcePosition(sourceId, x, y, z);
     }
 }
 
 void AudioEngine::SetRenderer(std::unique_ptr<SpatialRenderer> renderer) {
     if (renderer && renderer->Initialize(speakers_)) {
         renderer_ = std::move(renderer);
-        std::cout << "Renderer switched to: " << renderer_->GetName() << std::endl;
+        std::cout << "switched to " << renderer_->GetName() << "\n";
     } else {
-        std::cerr << "Failed to set renderer!" << std::endl;
+        std::cerr << "set renderer fail\n";
     }
 }
 
@@ -178,11 +180,10 @@ bool AudioEngine::LoadAudioFile(const std::string& filepath) {
     std::vector<float> buffer;
     
     if (!LoadWavFile(filepath, buffer, fileSampleRate)) {
-        std::cerr << "Failed to load audio file: " << filepath << std::endl;
+        std::cerr << "load wav fail " << filepath << "\n";
         return false;
     }
     
-    // Resample if needed (simplified - you may want to use a proper resampler)
     if (fileSampleRate != sampleRate_) {
         std::vector<float> resampled;
         float ratio = static_cast<float>(sampleRate_) / fileSampleRate;
@@ -201,31 +202,20 @@ bool AudioEngine::LoadAudioFile(const std::string& filepath) {
     
     audioBuffer_ = buffer;
     audioBufferPos_ = 0;
-    usePinkNoise_ = false;
+    useSineWave_ = false;
     
-    std::cout << "Loaded audio file: " << filepath << " (" << buffer.size() << " samples)" << std::endl;
+    std::cout << "loaded " << filepath << " " << buffer.size() << " samps\n";
     
     return true;
 }
 
-float AudioEngine::GeneratePinkNoise() {
-    // Simplified pink noise generator
-    float white = (static_cast<float>(rand()) / RAND_MAX) * 2.0f - 1.0f;
-    
-    pinkNoiseState_[0] = 0.99886f * pinkNoiseState_[0] + white * 0.0555179f;
-    pinkNoiseState_[1] = 0.99332f * pinkNoiseState_[1] + white * 0.0750759f;
-    pinkNoiseState_[2] = 0.96900f * pinkNoiseState_[2] + white * 0.1538520f;
-    pinkNoiseState_[3] = 0.86650f * pinkNoiseState_[3] + white * 0.3104856f;
-    pinkNoiseState_[4] = 0.55000f * pinkNoiseState_[4] + white * 0.5329522f;
-    pinkNoiseState_[5] = -0.7616f * pinkNoiseState_[5] - white * 0.0168980f;
-    
-    float pink = pinkNoiseState_[0] + pinkNoiseState_[1] + pinkNoiseState_[2] +
-                 pinkNoiseState_[3] + pinkNoiseState_[4] + pinkNoiseState_[5] + pinkNoiseState_[6] +
-                 white * 0.5362f;
-    
-    pinkNoiseState_[6] = white * 0.115926f;
-    
-    return pink * 0.11f; // Scale down
+float AudioEngine::GenerateSineWave() {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kFreq = 440.0f;
+    float inc = 2.0f * kPi * kFreq / static_cast<float>(sampleRate_);
+    sinePhase_ += inc;
+    if (sinePhase_ >= 2.0f * kPi) sinePhase_ -= 2.0f * kPi;
+    return std::sin(sinePhase_) * 0.2f;
 }
 
 int AudioEngine::AudioCallback(const void* inputBuffer,
@@ -243,36 +233,36 @@ int AudioEngine::ProcessAudio(float* output, unsigned long framesPerBuffer) {
         std::memset(output, 0, framesPerBuffer * numChannels_ * sizeof(float));
         return paContinue;
     }
-    
-    // Update smoothing
+
     float dt = framesPerBuffer / static_cast<float>(sampleRate_);
     renderer_->UpdateSmoothing(dt);
-    
-    const std::vector<float>& gains = renderer_->GetGains();
-    
-    // Generate or read audio source
+
+    int maxSources = renderer_->GetMaxSources();
+    std::memset(output, 0, framesPerBuffer * numChannels_ * sizeof(float));
+
     for (unsigned long i = 0; i < framesPerBuffer; ++i) {
         float sample = 0.0f;
-        
-        if (usePinkNoise_) {
-            sample = GeneratePinkNoise();
+
+        if (useSineWave_) {
+            sample = GenerateSineWave();
         } else if (!audioBuffer_.empty()) {
             if (audioBufferPos_ < audioBuffer_.size()) {
                 sample = audioBuffer_[audioBufferPos_];
                 audioBufferPos_++;
             } else {
-                // Loop
                 audioBufferPos_ = 0;
                 sample = audioBuffer_[audioBufferPos_];
                 audioBufferPos_++;
             }
         }
-        
-        // Apply gains to all channels
-        for (int ch = 0; ch < numChannels_; ++ch) {
-            output[i * numChannels_ + ch] = sample * gains[ch];
+
+        float* frameOut = output + i * numChannels_;
+        for (int s = 0; s < maxSources; ++s) {
+            const std::vector<float>& gains = renderer_->GetGainsForSource(s);
+            if (static_cast<int>(gains.size()) != numChannels_) continue;
+            SimdUtils::AccumulateGains(sample, gains.data(), frameOut, numChannels_);
         }
     }
-    
+
     return paContinue;
 }
