@@ -4,9 +4,17 @@ project(SoundARray)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find packages (PkgConfig used on Linux/macOS for portaudio)
-if(NOT WIN32)
-  find_package(PkgConfig)
+# Output backend: JACK (Linux default) or PortAudio
+if(UNIX AND NOT APPLE)
+  set(USE_JACK_DEFAULT ON)
+else()
+  set(USE_JACK_DEFAULT OFF)
+endif()
+option(USE_JACK "Use JACK output instead of PortAudio" ${USE_JACK_DEFAULT})
+
+# Find packages (PkgConfig for JACK)
+if(USE_JACK)
+    find_package(PkgConfig REQUIRED)
 endif()
 
 # OSC Pack sources (required)
@@ -27,14 +35,22 @@ if(NOT OSCPACK_SOURCES)
     message(FATAL_ERROR "oscpack not found. Run: git clone https://github.com/RossBencina/oscpack.git third_party/oscpack")
 endif()
 
-# PortAudio: prefer building as subproject (works on Windows/Linux/macOS)
-set(PORTAUDIO_SUBPROJECT OFF)
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/portaudio/CMakeLists.txt")
-    set(PORTAUDIO_SUBPROJECT ON)
-    set(PA_BUILD_SHARED_LIBS OFF CACHE BOOL "PortAudio static" FORCE)
-    set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/portaudio)
+# JACK (USE_JACK=ON, Linux default)
+if(USE_JACK)
+    pkg_check_modules(JACK REQUIRED jack)
+    add_definitions(-DUSE_JACK)
+    set(SOURCES_EXTRA src/JackAudioOutput.cpp)
+# PortAudio (USE_JACK=OFF)
+else()
+    set(PORTAUDIO_SUBPROJECT OFF)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/portaudio/CMakeLists.txt")
+        set(PORTAUDIO_SUBPROJECT ON)
+        set(PA_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        add_subdirectory(third_party/portaudio)
+    endif()
+    set(SOURCES_EXTRA src/PortAudioOutput.cpp)
 endif()
 
 # Source files
@@ -45,6 +61,7 @@ set(SOURCES
     src/OSCReceiver.cpp
     src/AudioEngine.cpp
     src/RendererFactory.cpp
+    ${SOURCES_EXTRA}
 )
 
 # Add executable
@@ -55,35 +72,40 @@ target_include_directories(SoundARray PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/oscpack
 )
 
-# Link PortAudio: try find_package first (vcpkg/system), then subproject, then manual
-if(NOT PORTAUDIO_SUBPROJECT)
-    find_package(portaudio CONFIG QUIET)
-endif()
-
-if(portaudio_FOUND)
-    target_link_libraries(SoundARray PRIVATE portaudio::portaudio)
-elseif(PORTAUDIO_SUBPROJECT)
-    target_link_libraries(SoundARray PRIVATE portaudio)
+# Link audio backend
+if(USE_JACK)
+    target_include_directories(SoundARray PRIVATE ${JACK_INCLUDE_DIRS})
+    target_link_libraries(SoundARray PRIVATE ${JACK_LIBRARIES})
+    target_compile_options(SoundARray PRIVATE ${JACK_CFLAGS_OTHER})
 else()
-    target_include_directories(SoundARray PRIVATE ${CMAKE_SOURCE_DIR}/third_party/portaudio/include)
-    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/portaudio/lib/.libs/libportaudio.a")
-        target_link_libraries(SoundARray PRIVATE
-            ${CMAKE_SOURCE_DIR}/third_party/portaudio/lib/.libs/libportaudio.a
-        )
-    elseif(WIN32)
-        if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/portaudio/build/Release/portaudio.lib")
-            target_link_libraries(SoundARray PRIVATE
-                ${CMAKE_SOURCE_DIR}/third_party/portaudio/build/Release/portaudio.lib
-            )
-        else()
-            message(FATAL_ERROR "PortAudio not found. Use: add_subdirectory(third_party/portaudio), or vcpkg install portaudio, or put portaudio.lib in third_party/portaudio/build/Release/")
-        endif()
+    if(NOT PORTAUDIO_SUBPROJECT)
+        find_package(portaudio CONFIG QUIET)
+    endif()
+    if(portaudio_FOUND)
+        target_link_libraries(SoundARray PRIVATE portaudio::portaudio)
+    elseif(PORTAUDIO_SUBPROJECT)
+        target_link_libraries(SoundARray PRIVATE portaudio)
     else()
-        find_library(PORTAUDIO_LIBRARY portaudio)
-        if(PORTAUDIO_LIBRARY)
-            target_link_libraries(SoundARray PRIVATE ${PORTAUDIO_LIBRARY})
+        target_include_directories(SoundARray PRIVATE ${CMAKE_SOURCE_DIR}/third_party/portaudio/include)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/portaudio/lib/.libs/libportaudio.a")
+            target_link_libraries(SoundARray PRIVATE
+                ${CMAKE_SOURCE_DIR}/third_party/portaudio/lib/.libs/libportaudio.a
+            )
+        elseif(WIN32)
+            if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/portaudio/build/Release/portaudio.lib")
+                target_link_libraries(SoundARray PRIVATE
+                    ${CMAKE_SOURCE_DIR}/third_party/portaudio/build/Release/portaudio.lib
+                )
+            else()
+                message(FATAL_ERROR "PortAudio not found. Use: add_subdirectory(third_party/portaudio), or vcpkg install portaudio")
+            endif()
         else()
-            message(FATAL_ERROR "PortAudio not found. Clone into third_party/portaudio or install via system package manager.")
+            find_library(PORTAUDIO_LIBRARY portaudio)
+            if(PORTAUDIO_LIBRARY)
+                target_link_libraries(SoundARray PRIVATE ${PORTAUDIO_LIBRARY})
+            else()
+                message(FATAL_ERROR "PortAudio not found. Use -DUSE_JACK=ON (Linux) or clone third_party/portaudio")
+            endif()
         endif()
     endif()
 endif()
@@ -122,32 +144,23 @@ endif()
 
 
 
-add_executable(offline_tests
-    src/offline_tests.cpp
-    src/VBAPRenderer.cpp
-)
-target_include_directories(offline_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-add_executable(offline_tests_vbap_diagnose
-    src/offline_tests_vbap_diagnose.cpp
-    src/VBAPRenderer.cpp
-)
-target_include_directories(offline_tests_vbap_diagnose PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-add_executable(offline_tests_smoothing_step
-    src/offline_tests_smoothing_step.cpp
-    src/VBAPRenderer.cpp
-)
-target_include_directories(offline_tests_smoothing_step PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-add_executable(offline_tests_simd_fuzz
-    src/offline_tests_simd_fuzz.cpp
-)
-target_include_directories(offline_tests_simd_fuzz PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-
-add_executable(offline_tests_real_layout
-    src/offline_tests_real_layout.cpp
-    src/VBAPRenderer.cpp
-)
-target_include_directories(offline_tests_real_layout PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/offline_tests.cpp")
+    add_executable(offline_tests src/offline_tests.cpp src/VBAPRenderer.cpp)
+    target_include_directories(offline_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/offline_tests_vbap_diagnose.cpp")
+    add_executable(offline_tests_vbap_diagnose src/offline_tests_vbap_diagnose.cpp src/VBAPRenderer.cpp)
+    target_include_directories(offline_tests_vbap_diagnose PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/offline_tests_smoothing_step.cpp")
+    add_executable(offline_tests_smoothing_step src/offline_tests_smoothing_step.cpp src/VBAPRenderer.cpp)
+    target_include_directories(offline_tests_smoothing_step PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/offline_tests_simd_fuzz.cpp")
+    add_executable(offline_tests_simd_fuzz src/offline_tests_simd_fuzz.cpp)
+    target_include_directories(offline_tests_simd_fuzz PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/offline_tests_real_layout.cpp")
+    add_executable(offline_tests_real_layout src/offline_tests_real_layout.cpp src/VBAPRenderer.cpp)
+    target_include_directories(offline_tests_real_layout PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()

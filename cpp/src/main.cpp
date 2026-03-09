@@ -56,8 +56,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    if (speakers.size() != 28) {
-        std::cerr << "expected 28 spk got " << speakers.size() << "\n";
+    if (speakers.empty()) {
+        std::cerr << "no speakers in " << yamlPath << "\n";
+        PauseBeforeExit();
+        return 1;
     }
     
     AudioEngine engine;
