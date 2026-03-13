@@ -21,23 +21,17 @@ static void PauseBeforeExit() {
 void PrintActiveSpeakers(SpatialRenderer* renderer, const std::vector<Speaker>& speakers) {
     if (!renderer) return;
     std::vector<float> gains = renderer->CopyGainsForSource(0);
-    
-    std::cout << "\rspk: ";
+
+    std::cout << "[DBG] 作用扬声器: ";
     bool hasActive = false;
-    
     for (size_t i = 0; i < gains.size(); ++i) {
         if (gains[i] > 0.01f) {
-            std::cout << "[" << speakers[i].id << ": " 
-                      << std::fixed << std::setprecision(2) << gains[i] << "] ";
+            std::cout << "id=" << speakers[i].id << " g=" << std::fixed << std::setprecision(2) << gains[i] << " ";
             hasActive = true;
         }
     }
-    
-    if (!hasActive) {
-        std::cout << "None";
-    }
-    
-    std::cout << std::flush;
+    if (!hasActive) std::cout << "无";
+    std::cout << std::endl;
 }
 
 int main(int argc, char* argv[]) {

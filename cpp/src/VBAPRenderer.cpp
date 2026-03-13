@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <iostream>
+#include <iomanip>
 #include <unordered_set>
 #include <vector>
 
@@ -203,8 +204,25 @@ void VBAPRenderer::ComputeVBAP(int sourceId, float x, float y, float z) {
         std::fill(gains.begin(), gains.end(), 0.0f);
         gains[bestIdx] = 1.0f;
         static int s_fallbackCount = 0;
-        if (++s_fallbackCount % 500 == 0) {
-            std::cerr << "fb spk" << bestIdx << " src" << sourceId << "\n";
+        if (++s_fallbackCount % 60 == 0) {
+            std::cerr << "[DBG] fallback: 单扬声器 spk" << bestIdx << " (id=" << speakers_[bestIdx].id << ")\n";
+        }
+    }
+
+    /* 调试：作用扬声器输出（限流） */
+    {
+        static int s_dbgTick = 0;
+        if (++s_dbgTick % 30 == 0) {
+            std::cerr << "[DBG] 作用扬声器: ";
+            int n = 0;
+            for (size_t i = 0; i < gains.size(); ++i) {
+                if (gains[i] > 0.01f) {
+                    if (n++) std::cerr << ", ";
+                    std::cerr << "spk" << i << "(id=" << speakers_[i].id << ",g=" << std::fixed << gains[i] << ")";
+                }
+            }
+            if (n == 0) std::cerr << "无";
+            std::cerr << "\n";
         }
     }
 

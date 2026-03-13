@@ -1,251 +1,265 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// 单个空间声源。可独立使用（单声源），也可由 SourceManager 统一管理（多声源）。
+///
+/// 职责：
+///   1. 每帧按 updateRate 通过 OSC 发送位置到 C++ 后端
+///      - multiSourceOSC = true  → /spatial/source_pos (int id, float x, float y, float z)
+///      - multiSourceOSC = false → /spatial/source_pos (float x, float y, float z)  [单声源兼容]
+///   2. ContributeGainsToManager() — 由 SourceManager 每帧调用，计算最近3个扬声器并累积增益
+///   3. SetSelected(bool) — 由 SourceManager 调用，切换高亮外观
+/// </summary>
 public class SpatialSource : MonoBehaviour {
+
+    // ──────────────────────────────────────────────────────────────────
+    // Inspector 字段
+    // ──────────────────────────────────────────────────────────────────
+
     [Header("OSC Settings")]
-    public bool enableOSC = false; // 是否启用 OSC 发送（无后端时可禁用）
+    public bool enableOSC = false;
     public string oscIP = "127.0.0.1";
     public int oscPort = 7000;
-    public float updateRate = 60.0f; // Updates per second
-    
+    public float updateRate = 60.0f;
+    [Tooltip("true: 发送 (id, x, y, z)；false: 仅 (x, y, z)，兼容单声源后端")]
+    public bool multiSourceOSC = true;
+
+    [Header("Source Identity")]
+    [Tooltip("声源编号 0-7，由 SourceManager 在创建时设置")]
+    public int sourceId = 0;
+
     [Header("Visual Settings")]
+    [Tooltip("未选中时的材质，留空则自动创建黄色")]
     public Material sourceMaterial;
+    [Tooltip("选中时的材质，留空则自动创建青色")]
+    public Material selectedMaterial;
     public float sourceScale = 0.15f;
+
+    [Header("Line Renderer")]
     public Color lineColor = Color.red;
     public float lineWidth = 0.02f;
-    
-    private OSCClient oscClient;
-    private SpeakerManager speakerManager;
-    private List<LineRenderer> lineRenderers = new List<LineRenderer>();
-    private List<int> activeSpeakerIds = new List<int>();
-    private float lastUpdateTime = 0f;
-    
+    public bool showLines = true;
+
+    // ──────────────────────────────────────────────────────────────────
+    // 内部状态
+    // ──────────────────────────────────────────────────────────────────
+
+    private OSCClient _oscClient;
+    private SpeakerManager _speakerManager;
+    private readonly List<LineRenderer> _lines = new List<LineRenderer>();
+    private float _lastOscTime;
+    private Renderer _ballRenderer;
+    private Material _runtimeDefaultMat;
+    private Material _runtimeSelectedMat;
+    private bool _isSelected;
+    private TextMesh _idLabel;
+
+    // ──────────────────────────────────────────────────────────────────
+    // Unity 生命周期
+    // ──────────────────────────────────────────────────────────────────
+
     void Start() {
-        // Initialize OSC client (only if enabled)
-        if (enableOSC) {
-            oscClient = new OSCClient(oscIP, oscPort);
-            #if UNITY_EDITOR
-            Debug.Log($"[SpatialSource] OSC 已启用，目标: {oscIP}:{oscPort}");
-            #endif
-        } else {
-            #if UNITY_EDITOR
-            Debug.Log("[SpatialSource] OSC 已禁用（无后端模式）");
-            #endif
-        }
-        
-        // Find SpeakerManager
-        speakerManager = FindObjectOfType<SpeakerManager>();
-        if (speakerManager == null) {
-            Debug.LogError("SpeakerManager not found!");
-        }
-        
-        // Setup visual
-        SetupVisual();
-        
-        // Setup grab interaction (Meta XR SDK)
-        SetupGrabInteraction();
+        _speakerManager = FindObjectOfType<SpeakerManager>();
+
+        if (enableOSC)
+            _oscClient = new OSCClient(oscIP, oscPort);
+
+        BuildVisual();
+
+#if UNITY_EDITOR
+        if (!GetComponent<SimpleDrag>())
+            gameObject.AddComponent<SimpleDrag>();
+#endif
     }
-    
-    void SetupVisual() {
-        // Create sphere for source
-        GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        sphere.name = "SourceVisual";
+
+    void Update() {
+        // OSC 发送（按设定频率）
+        if (Time.time - _lastOscTime >= 1f / Mathf.Max(updateRate, 1f)) {
+            SendOSCPosition();
+            _lastOscTime = Time.time;
+        }
+
+        // 如果没有 SourceManager（单声源模式），自己驱动增益可视化
+        if (FindObjectOfType<SourceManager>() == null)
+            SingleSourceFallbackGain();
+    }
+
+    void OnDestroy() {
+        _oscClient?.Close();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Public API（供 SourceManager 调用）
+    // ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 计算此声源对各扬声器的近似增益，并累积到 SpeakerManager 的当帧增益帧中。
+    /// 由 SourceManager.Update() 统一调用，不要在 Update() 中直接调用。
+    /// </summary>
+    public void ContributeGainsToManager() {
+        if (_speakerManager == null) return;
+        var speakers = _speakerManager.GetSpeakers();
+        if (speakers == null || speakers.Count == 0) return;
+
+        Vector3 pos = transform.position;
+
+        // 计算到每个扬声器的距离及近似增益
+        var dists = new List<(int id, float dist, float gain)>();
+        foreach (var spk in speakers) {
+            float d = Vector3.Distance(pos, new Vector3(spk.x, spk.y, spk.z));
+            float g = 1f / (1f + d * d);       // 平方反比近似（VBAP 近似可视化）
+            dists.Add((spk.id, d, g));
+        }
+        dists.Sort((a, b) => a.dist.CompareTo(b.dist));
+
+        // 取最近 3 个向 SpeakerManager 累积（携带 sourceId，用于颜色映射）
+        int top = Mathf.Min(3, dists.Count);
+        for (int i = 0; i < top; i++)
+            _speakerManager.AccumulateSpeakerGain(dists[i].id, dists[i].gain, sourceId);
+
+        // 更新连线
+        if (showLines) UpdateLines(dists, top);
+    }
+
+    /// <summary>设置选中状态，更新球体外观。由 SourceManager 调用。</summary>
+    public void SetSelected(bool selected) {
+        _isSelected = selected;
+        RefreshMaterial();
+        if (_idLabel != null)
+            _idLabel.color = selected ? Color.cyan : Color.white;
+    }
+
+    /// <summary>刷新 ID 标签文字（sourceId 变更后调用）。</summary>
+    public void RefreshLabel() {
+        if (_idLabel != null) _idLabel.text = sourceId.ToString();
+    }
+
+    /// <summary>手动触发 OSC 发送（供 EditorDebugHelper 通过 SendMessage 调用）。</summary>
+    public void SendOSCPosition() {
+        if (!enableOSC || _oscClient == null) return;
+        Vector3 p = transform.position;
+        if (multiSourceOSC)
+            _oscClient.Send("/spatial/source_pos", sourceId, p.x, p.y, p.z);
+        else
+            _oscClient.Send("/spatial/source_pos", p.x, p.y, p.z);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // 私有辅助
+    // ──────────────────────────────────────────────────────────────────
+
+    void BuildVisual() {
+        // 主球体
+        var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        sphere.name = "SourceBall";
         sphere.transform.SetParent(transform);
         sphere.transform.localPosition = Vector3.zero;
         sphere.transform.localScale = Vector3.one * sourceScale;
-        
-        Renderer renderer = sphere.GetComponent<Renderer>();
-        if (renderer != null) {
-            if (sourceMaterial != null) {
-                renderer.material = sourceMaterial;
-            } else {
-                // 如果没有设置材质，创建默认黄色材质
-                Material defaultMat = new Material(Shader.Find("Standard"));
-                defaultMat.color = new Color(1f, 0.8f, 0.2f); // 黄色
-                renderer.material = defaultMat;
-                
-                #if UNITY_EDITOR
-                Debug.LogWarning("[SpatialSource] Source Material 未设置，使用默认黄色材质");
-                #endif
-            }
+        Destroy(sphere.GetComponent<Collider>());   // 碰撞体留在父对象
+
+        _ballRenderer = sphere.GetComponent<Renderer>();
+
+        // 默认材质（未选中：黄色）
+        if (sourceMaterial != null) {
+            _runtimeDefaultMat = new Material(sourceMaterial);
+        } else {
+            var s = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            _runtimeDefaultMat = new Material(s);
+            _runtimeDefaultMat.color = new Color(1f, 0.8f, 0.2f);
         }
-        
-        #if UNITY_EDITOR
-        Debug.Log($"[SpatialSource] 声源小球已创建，位置: {transform.position}, 大小: {sourceScale}");
-        #endif
-        
-        // Keep collider for interaction (will be used by grab system)
-        // Don't destroy it here
-    }
-    
-    void SetupGrabInteraction() {
-        // Add collider for grabbing
-        SphereCollider grabCollider = gameObject.AddComponent<SphereCollider>();
-        grabCollider.radius = sourceScale * 1.5f;
-        grabCollider.isTrigger = false; // Need non-trigger for physics interaction
-        
-        // Add Rigidbody for physics interaction
-        Rigidbody rb = gameObject.AddComponent<Rigidbody>();
-        rb.isKinematic = true; // We'll control movement manually
-        
-        // Add Meta XR grab component
-        // Uncomment and adjust based on your Meta XR SDK version:
-        
-        // For Meta XR SDK v50+:
-        // #if UNITY_ANDROID && !UNITY_EDITOR
-        // using Meta.XR.InteractionSystem;
-        // var grabInteractable = gameObject.AddComponent<GrabInteractable>();
-        // #endif
-        
-        // For older Meta XR SDK:
-        // #if UNITY_ANDROID && !UNITY_EDITOR
-        // using Oculus.Interaction;
-        // var grabInteractable = gameObject.AddComponent<GrabInteractable>();
-        // #endif
-        
-        // For testing in Editor, you can use simple mouse drag:
-        #if UNITY_EDITOR
-        gameObject.AddComponent<SimpleDrag>();
-        #endif
-    }
-    
-    void Update() {
-        // Send OSC position
-        float timeSinceLastUpdate = Time.time - lastUpdateTime;
-        if (timeSinceLastUpdate >= 1.0f / updateRate) {
-            SendOSCPosition();
-            lastUpdateTime = Time.time;
+
+        // 选中材质（青色）
+        if (selectedMaterial != null) {
+            _runtimeSelectedMat = new Material(selectedMaterial);
+        } else {
+            _runtimeSelectedMat = new Material(_runtimeDefaultMat);
+            _runtimeSelectedMat.color = Color.cyan;
         }
-        
-        // Update visual feedback
-        UpdateVisualFeedback();
+
+        _ballRenderer.material = _runtimeDefaultMat;
+
+        // ID 标签
+        var labelGo = new GameObject("SourceLabel");
+        labelGo.transform.SetParent(transform);
+        labelGo.transform.localPosition = Vector3.up * (sourceScale * 0.6f + 0.06f);
+        _idLabel = labelGo.AddComponent<TextMesh>();
+        _idLabel.text = sourceId.ToString();
+        _idLabel.fontSize = 24;
+        _idLabel.anchor = TextAnchor.MiddleCenter;
+        _idLabel.color = Color.white;
+        labelGo.AddComponent<LabelFacer>();
+
+        // Collider + Rigidbody（让 SimpleDrag / 手柄 Grab 可用）
+        var col = gameObject.GetComponent<SphereCollider>();
+        if (col == null) col = gameObject.AddComponent<SphereCollider>();
+        col.radius = sourceScale * 1.2f;
+
+        var rb = gameObject.GetComponent<Rigidbody>();
+        if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
     }
-    
-    void SendOSCPosition() {
-        if (!enableOSC || oscClient == null) return;
-        
-        Vector3 pos = transform.position;
-        oscClient.Send("/spatial/source_pos", pos.x, pos.y, pos.z);
-        
-        // 调试日志（仅在 Editor 中显示，且仅在启用详细日志时）
-        #if UNITY_EDITOR && false  // 设置为 true 可启用详细 OSC 日志
-        Debug.Log($"[OSC] 发送位置: ({pos.x:F2}, {pos.y:F2}, {pos.z:F2})");
-        #endif
+
+    void RefreshMaterial() {
+        if (_ballRenderer == null) return;
+        _ballRenderer.material = _isSelected ? _runtimeSelectedMat : _runtimeDefaultMat;
     }
-    
-    void UpdateVisualFeedback() {
-        if (speakerManager == null) return;
-        
-        List<SpeakerData> speakers = speakerManager.GetSpeakers();
+
+    /// <summary>单声源降级：无 SourceManager 时，自己更新扬声器增益。（向后兼容）</summary>
+    void SingleSourceFallbackGain() {
+        if (_speakerManager == null) return;
+        var speakers = _speakerManager.GetSpeakers();
         if (speakers == null || speakers.Count == 0) return;
-        
-        // Calculate distances and find closest 3 speakers
-        List<(int id, float distance, float gain)> speakerDistances = new List<(int, float, float)>();
-        
-        Vector3 sourcePos = transform.position;
-        
-        foreach (SpeakerData speaker in speakers) {
-            Vector3 speakerPos = new Vector3(speaker.x, speaker.y, speaker.z);
-            float distance = Vector3.Distance(sourcePos, speakerPos);
-            
-            // Calculate gain based on distance (inverse square law approximation)
-            float gain = 1.0f / (1.0f + distance * distance);
-            
-            speakerDistances.Add((speaker.id, distance, gain));
+
+        Vector3 pos = transform.position;
+        var dists = new List<(int id, float dist, float gain)>();
+        foreach (var spk in speakers) {
+            float d = Vector3.Distance(pos, new Vector3(spk.x, spk.y, spk.z));
+            dists.Add((spk.id, d, 1f / (1f + d * d)));
         }
-        
-        // Sort by distance
-        speakerDistances.Sort((a, b) => a.distance.CompareTo(b.distance));
-        
-        // Get top 3
-        List<int> newActiveSpeakers = new List<int>();
-        for (int i = 0; i < Mathf.Min(3, speakerDistances.Count); ++i) {
-            newActiveSpeakers.Add(speakerDistances[i].id);
-        }
-        
-        // Update highlights and speaker states
-        bool speakersChanged = !ListsEqual(activeSpeakerIds, newActiveSpeakers);
-        
-        if (speakersChanged) {
-            // Clear old highlights
-            foreach (int id in activeSpeakerIds) {
-                speakerManager.UpdateSpeakerState(id, 0.0f);
-            }
-            
-            // Set new highlights
-            activeSpeakerIds = newActiveSpeakers;
-        }
-        
-        // Update all speaker states with gains
-        for (int i = 0; i < speakerDistances.Count; ++i) {
-            int speakerId = speakerDistances[i].id;
-            float gain = speakerDistances[i].gain;
-            speakerManager.UpdateSpeakerState(speakerId, gain);
-        }
-        
-        // Update line renderers
-        UpdateLineRenderers();
+        dists.Sort((a, b) => a.dist.CompareTo(b.dist));
+
+        // 非活跃扬声器清零
+        foreach (var spk in speakers)
+            _speakerManager.UpdateSpeakerState(spk.id, 0f);
+
+        int top = Mathf.Min(3, dists.Count);
+        for (int i = 0; i < top; i++)
+            _speakerManager.UpdateSpeakerState(dists[i].id, dists[i].gain);
+
+        if (showLines) UpdateLines(dists, top);
     }
-    
-    void UpdateLineRenderers() {
-        // Ensure we have enough line renderers
-        while (lineRenderers.Count < activeSpeakerIds.Count) {
-            GameObject lineObj = new GameObject($"Line_{lineRenderers.Count}");
-            lineObj.transform.SetParent(transform);
-            LineRenderer lr = lineObj.AddComponent<LineRenderer>();
-            lr.material = new Material(Shader.Find("Sprites/Default"));
-            lr.startColor = lineColor;
-            lr.endColor = lineColor;
-            lr.startWidth = lineWidth;
-            lr.endWidth = lineWidth;
+
+    void UpdateLines(List<(int id, float dist, float gain)> sorted, int top) {
+        if (_speakerManager == null) return;
+
+        while (_lines.Count < top) {
+            var go = new GameObject($"Line_{_lines.Count}");
+            go.transform.SetParent(transform);
+            var lr = go.AddComponent<LineRenderer>();
+            lr.material = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Unlit/Color"));
+            lr.startColor = lr.endColor = lineColor;
+            lr.startWidth = lr.endWidth = lineWidth;
             lr.positionCount = 2;
             lr.useWorldSpace = true;
-            lineRenderers.Add(lr);
+            _lines.Add(lr);
         }
-        
-        // Remove excess line renderers
-        while (lineRenderers.Count > activeSpeakerIds.Count) {
-            LineRenderer lr = lineRenderers[lineRenderers.Count - 1];
-            lineRenderers.RemoveAt(lineRenderers.Count - 1);
-            Destroy(lr.gameObject);
+        while (_lines.Count > top) {
+            Destroy(_lines[^1].gameObject);
+            _lines.RemoveAt(_lines.Count - 1);
         }
-        
-        // Update line positions and widths
-        Vector3 sourcePos = transform.position;
-        List<SpeakerData> speakers = speakerManager.GetSpeakers();
-        
-        for (int i = 0; i < activeSpeakerIds.Count; ++i) {
-            int speakerId = activeSpeakerIds[i];
-            SpeakerData speaker = speakers.Find(s => s.id == speakerId);
-            
-            if (speaker != null) {
-                Vector3 speakerPos = new Vector3(speaker.x, speaker.y, speaker.z);
-                float distance = Vector3.Distance(sourcePos, speakerPos);
-                float gain = 1.0f / (1.0f + distance * distance);
-                
-                LineRenderer lr = lineRenderers[i];
-                lr.SetPosition(0, sourcePos);
-                lr.SetPosition(1, speakerPos);
-                
-                // Adjust width based on gain
-                float width = lineWidth * (0.5f + gain * 0.5f);
-                lr.startWidth = width;
-                lr.endWidth = width * 0.5f;
-            }
-        }
-    }
-    
-    bool ListsEqual(List<int> list1, List<int> list2) {
-        if (list1.Count != list2.Count) return false;
-        for (int i = 0; i < list1.Count; ++i) {
-            if (list1[i] != list2[i]) return false;
-        }
-        return true;
-    }
-    
-    void OnDestroy() {
-        if (oscClient != null) {
-            oscClient.Close();
+
+        var spkList = _speakerManager.GetSpeakers();
+        Vector3 srcPos = transform.position;
+        for (int i = 0; i < top; i++) {
+            var spk = spkList.Find(s => s.id == sorted[i].id);
+            if (spk == null) continue;
+            float w = lineWidth * Mathf.Lerp(0.5f, 1.5f, sorted[i].gain);
+            _lines[i].SetPosition(0, srcPos);
+            _lines[i].SetPosition(1, new Vector3(spk.x, spk.y, spk.z));
+            _lines[i].startWidth = w;
+            _lines[i].endWidth = w * 0.5f;
         }
     }
 }
