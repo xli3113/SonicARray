@@ -61,6 +61,21 @@ public class SpeakerManager : MonoBehaviour {
     private readonly Dictionary<int, (int sourceId, float gain)> _pendingDominant =
         new Dictionary<int, (int, float)>();
     private bool _inGainFrame;
+
+    // ── C++ VBAP feedback tracking ────────────────────────────────────
+    private float _lastCppGainsTime = -999f;
+
+    /// <summary>
+    /// True when a /vbap/gains OSC message was received within the last 0.5 s.
+    /// While true, SourceManager and SpatialSource suppress the local
+    /// inverse-square approximation so C++ VBAP gains drive visualization.
+    /// </summary>
+    public bool HasFreshCppGains => UnityEngine.Time.time - _lastCppGainsTime < 0.5f;
+
+    /// <summary>Called by VBAPGainReceiver after committing a C++ gain frame.</summary>
+    public void NotifyCppGainsReceived() {
+        _lastCppGainsTime = UnityEngine.Time.time;
+    }
     
     void Start() {
         LoadSpeakers();

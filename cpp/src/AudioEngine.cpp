@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <chrono>
 
 bool LoadWavFile(const std::string& filepath, std::vector<float>& buffer, int& sampleRate) {
     std::ifstream file(filepath, std::ios::binary);
@@ -45,6 +46,10 @@ bool LoadWavFile(const std::string& filepath, std::vector<float>& buffer, int& s
 
 AudioEngine::AudioEngine()
     : oscReceiver_(nullptr),
+      oscSender_(nullptr),
+      gainFeedbackRunning_(false),
+      feedbackHost_("127.0.0.1"),
+      feedbackPort_(9000),
       sampleRate_(44100), numChannels_(0), audioBufferPos_(0),
       useSineWave_(true), running_(false) {
 
@@ -60,6 +65,10 @@ bool AudioEngine::Initialize(const std::vector<Speaker>& speakers, int sampleRat
     sampleRate_ = sampleRate;
     numChannels_ = static_cast<int>(speakers.size());
 
+    // Build ordered speaker ID list for feedback messages
+    speakerIds_.clear();
+    for (const auto& spk : speakers_) speakerIds_.push_back(spk.id);
+
     renderer_ = RendererFactory::Create(RendererFactory::Type::VBAP);
     if (!renderer_->Initialize(speakers_)) {
         std::cerr << "renderer init fail\n";
@@ -71,6 +80,8 @@ bool AudioEngine::Initialize(const std::vector<Speaker>& speakers, int sampleRat
     oscReceiver_->SetMultiSourcePositionCallback([this](int sourceId, float x, float y, float z) {
         this->SetSourcePosition(sourceId, x, y, z);
     });
+
+    oscSender_ = new OSCSender(feedbackHost_, feedbackPort_);
 
 #ifdef USE_JACK
     output_ = std::make_unique<JackAudioOutput>();
@@ -103,6 +114,9 @@ void AudioEngine::Shutdown() {
         oscReceiver_ = nullptr;
     }
 
+    delete oscSender_;
+    oscSender_ = nullptr;
+
     renderer_.reset();
 }
 
@@ -121,6 +135,9 @@ bool AudioEngine::Start() {
         oscReceiver_->Start();
     }
 
+    gainFeedbackRunning_ = true;
+    gainFeedbackThread_ = std::thread(&AudioEngine::GainFeedbackThread, this);
+
     running_ = true;
     return true;
 }
@@ -128,8 +145,36 @@ bool AudioEngine::Start() {
 void AudioEngine::Stop() {
     running_ = false;
 
+    gainFeedbackRunning_ = false;
+    if (gainFeedbackThread_.joinable())
+        gainFeedbackThread_.join();
+
     if (output_) {
         output_->Stop();
+    }
+}
+
+void AudioEngine::GainFeedbackThread() {
+    while (gainFeedbackRunning_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(33)); // ~30 Hz
+
+        if (!renderer_ || !oscSender_) continue;
+
+        int maxSources = renderer_->GetMaxSources();
+        for (int s = 0; s < maxSources; ++s) {
+            std::vector<float> gains = renderer_->CopyGainsForSource(s);
+            if (gains.empty()) continue;
+
+            // Skip inactive sources (except source 0 which is always sent so
+            // Unity knows the backend is alive and can clear stale visuals).
+            if (s > 0) {
+                bool active = false;
+                for (float g : gains) { if (g > 1e-5f) { active = true; break; } }
+                if (!active) continue;
+            }
+
+            oscSender_->SendGains(s, speakerIds_, gains);
+        }
     }
 }
 

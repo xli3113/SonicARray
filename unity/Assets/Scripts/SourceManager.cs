@@ -76,7 +76,12 @@ public class SourceManager : MonoBehaviour {
     void Update() {
         if (speakerManager == null || _sources.Count == 0) return;
 
-        // ── 每帧：聚合所有声源的增益贡献 ──
+        // When the C++ backend is sending real VBAP gains, VBAPGainReceiver
+        // drives the speaker visuals. Skip the local approximation to avoid
+        // overwriting the ground-truth data.
+        if (speakerManager.HasFreshCppGains) return;
+
+        // ── 每帧：聚合所有声源的增益贡献（本地近似，后端离线时使用）──
         speakerManager.BeginGainFrame();
         foreach (var src in _sources) {
             if (src != null)

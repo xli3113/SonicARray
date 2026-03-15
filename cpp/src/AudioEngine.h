@@ -2,11 +2,13 @@
 
 #include "SpatialRenderer.h"
 #include "OSCReceiver.h"
+#include "OSCSender.h"
 #include "IAudioOutput.h"
 #include <vector>
 #include <string>
 #include <atomic>
 #include <memory>
+#include <thread>
 
 class AudioEngine {
 public:
@@ -30,12 +32,29 @@ public:
     SpatialRenderer* GetRenderer() const { return renderer_.get(); }
     void SetRenderer(std::unique_ptr<SpatialRenderer> renderer);
 
+    // Configure where gain feedback OSC packets are sent (default: 127.0.0.1:9000).
+    // Must be called before Initialize().
+    void SetFeedbackTarget(const std::string& host, int port) {
+        feedbackHost_ = host;
+        feedbackPort_ = port;
+    }
+
 private:
     void ProcessAudioPlanar(float** outChannels, unsigned long nframes);
+    void GainFeedbackThread();
 
     std::unique_ptr<IAudioOutput> output_;
     std::unique_ptr<SpatialRenderer> renderer_;
     OSCReceiver* oscReceiver_;
+    OSCSender* oscSender_;
+
+    std::thread gainFeedbackThread_;
+    std::atomic<bool> gainFeedbackRunning_;
+
+    std::string feedbackHost_;
+    int feedbackPort_;
+
+    std::vector<int> speakerIds_;   // parallel to speakers_, built in Initialize()
 
     std::vector<Speaker> speakers_;
     int sampleRate_;

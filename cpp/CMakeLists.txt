@@ -59,6 +59,7 @@ set(SOURCES
     src/ConfigLoader.cpp
     src/VBAPRenderer.cpp
     src/OSCReceiver.cpp
+    src/OSCSender.cpp
     src/AudioEngine.cpp
     src/RendererFactory.cpp
     ${SOURCES_EXTRA}

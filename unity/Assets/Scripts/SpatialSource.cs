@@ -74,15 +74,17 @@ public class SpatialSource : MonoBehaviour {
     }
 
     void Update() {
-        // OSC 发送（按设定频率）
+        // OSC 发送（按设定频率）—— 无论后端是否在线都发送位置
         if (Time.time - _lastOscTime >= 1f / Mathf.Max(updateRate, 1f)) {
             SendOSCPosition();
             _lastOscTime = Time.time;
         }
 
-        // 如果没有 SourceManager（单声源模式），自己驱动增益可视化
-        if (FindObjectOfType<SourceManager>() == null)
-            SingleSourceFallbackGain();
+        // 单声源降级：仅当没有 SourceManager 且 C++ 后端未提供增益时驱动可视化
+        if (FindObjectOfType<SourceManager>() == null) {
+            if (_speakerManager == null || !_speakerManager.HasFreshCppGains)
+                SingleSourceFallbackGain();
+        }
     }
 
     void OnDestroy() {
@@ -99,6 +101,9 @@ public class SpatialSource : MonoBehaviour {
     /// </summary>
     public void ContributeGainsToManager() {
         if (_speakerManager == null) return;
+        // Guard: if C++ backend is sending true VBAP gains, skip local approximation.
+        // (SourceManager already skips calling this, but belt-and-suspenders.)
+        if (_speakerManager.HasFreshCppGains) return;
         var speakers = _speakerManager.GetSpeakers();
         if (speakers == null || speakers.Count == 0) return;
 
