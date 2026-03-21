@@ -183,9 +183,12 @@ On Windows, run `open_firewall.bat` (included) as administrator to open port 700
 ---
 
 ## Screenshots
+Backend
 
 ![backend](pic/backend.png)
+Frontend
 
+![visual_frontend](pic/visual_frontend.png)
 ---
 
 ## Research Context
