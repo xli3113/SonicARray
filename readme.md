@@ -1,5 +1,7 @@
 # SonicARray
-
+<div align="center">
+  <img src="pic/logo.png" width="120">
+</div>
 <!-- ===== LOGO PLACEMENT =====
      Put your logo right here, below the title, above the description.
      Recommended: a centered image, 200–400 px wide.
