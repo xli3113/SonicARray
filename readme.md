@@ -3,16 +3,7 @@
 <div align="center">
   <img src="pic/logo.png" width="120">
 </div>
-<!-- ===== LOGO PLACEMENT =====
-     Put your logo right here, below the title, above the description.
-     Recommended: a centered image, 200–400 px wide.
 
-       <p align="center">
-         <img src="docs/logo.png" alt="SonicARray logo" width="300">
-       </p>
-
-     For a wide/banner-style logo, use width="100%" or width="600".
-     ============================= -->
 
 **AR-assisted spatial audio visualization for multi-speaker VBAP rendering.**
 
