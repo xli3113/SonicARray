@@ -184,29 +184,7 @@ On Windows, run `open_firewall.bat` (included) as administrator to open port 700
 
 ## Screenshots
 
-<!-- ===== SCREENSHOT GUIDANCE =====
-
-SHOULD YOU ADD SCREENSHOTS? Yes — strongly recommended for both sides.
-
-BACKEND DASHBOARD (easy to capture right now):
-  Run ./SoundARray, let it receive a few OSC packets, then screenshot the terminal.
-  The dashboard shows uptime, packet rate, source XYZ positions, and gain bars.
-
-    ![Backend dashboard](docs/screenshots/backend_dashboard.png)
-
-UNITY / AR FRONTEND (capture from inside the headset):
-  Use Meta Quest Developer Hub (MQDH) → Casting / Screenshot,
-  or:  adb exec-out screencap -p > ar_view.png
-  Best moments to capture:
-    - A source ball with coloured lines reaching 2–3 active speakers
-    - Two or more sources active at once (different line colours)
-    - The in-headset status panel
-
-    ![AR view — source lines to speakers](docs/screenshots/ar_source_lines.png)
-
-One screenshot from each side is enough to make the README immediately clear
-to someone who has never seen the system.
-================================= -->
+![backend](pic/backend.png)
 
 ---
 
