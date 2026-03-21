@@ -1,0 +1,65 @@
+# Couch 204 — 13-speaker layout
+# Source: "Couch 204 Ambisonics Decoder (Pre-calculated 3rd Order).json"
+# Generated from IEM AllRADecoder loudspeaker positions (spherical → Cartesian).
+#
+# Coordinate system: x = right, y = front, z = up  (matches Unity→C++ OSC swap)
+# Conversion from IEM spherical (az, el, r):
+#   x = -r * cos(el) * sin(az)   (IEM +az is left, so negate for right=+x)
+#   y =  r * cos(el) * cos(az)   (IEM az=0 is front = +y)
+#   z =  r * sin(el)             (up = +z)
+#
+# Channel 14 (IsImaginary=true, el=-90°) is excluded — phantom speaker only.
+
+speakers:
+  - id: 1
+    x: -0.4141
+    y: 1.0000
+    z: 0.0000
+  - id: 2
+    x: 0.4141
+    y: 1.0000
+    z: 0.0000
+  - id: 3
+    x: 1.2001
+    y: 0.4848
+    z: 0.0000
+  - id: 4
+    x: 1.2001
+    y: -0.4848
+    z: 0.0000
+  - id: 5
+    x: 0.4141
+    y: -1.0000
+    z: 0.0000
+  - id: 6
+    x: -0.4141
+    y: -1.0000
+    z: 0.0000
+  - id: 7
+    x: -1.2001
+    y: -0.4848
+    z: 0.0000
+  - id: 8
+    x: -1.2001
+    y: 0.4848
+    z: 0.0000
+  - id: 9
+    x: 0.0000
+    y: 1.0001
+    z: 0.3481
+  - id: 10
+    x: 1.2000
+    y: 0.0000
+    z: 0.6250
+  - id: 11
+    x: 0.0000
+    y: -1.0001
+    z: 0.3481
+  - id: 12
+    x: -1.2000
+    y: 0.0000
+    z: 0.6250
+  - id: 13
+    x: 0.0000
+    y: 0.0000
+    z: 0.4706

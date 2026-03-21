@@ -1,0 +1,44 @@
+﻿  Building Custom Rule C:/Users/Administrator/Desktop/SonicARray/cpp/CMakeLists.txt
+  main.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\SpatialRenderer.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+  ConfigLoader.cpp
+  VBAPRenderer.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\VBAPRenderer.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\SpatialRenderer.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\VBAPRenderer.cpp(56,68): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\VBAPRenderer.cpp(104,33): warning C4267: '=': conversion from 'size_t' to 'int', possible loss of data
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\VBAPRenderer.cpp(107,33): warning C4267: '=': conversion from 'size_t' to 'int', possible loss of data
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\VBAPRenderer.cpp(215,29): warning C4267: '=': conversion from 'size_t' to 'int', possible loss of data
+  OSCReceiver.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\OSCReceiver.cpp(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+  AudioEngine.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\AudioEngine.cpp(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\SpatialRenderer.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\RendererFactory.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\SimdUtils.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+  RendererFactory.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\RendererFactory.cpp(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\RendererFactory.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\SpatialRenderer.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+C:\Users\Administrator\Desktop\SonicARray\cpp\src\VBAPRenderer.h(1,1): warning C4819: The file contains a character that cannot be represented in the current code page (936). Save the file in Unicode format to prevent data loss
+  OscOutboundPacketStream.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\osc\OscOutboundPacketStream.cpp(363,10): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\osc\OscOutboundPacketStream.cpp(605,10): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\osc\OscOutboundPacketStream.cpp(625,10): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+  OscPrintReceivedElements.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\osc\OscPrintReceivedElements.cpp(129,47): warning C4996: 'ctime': This function or variable may be unsafe. Consider using ctime_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+  OscReceivedElements.cpp
+  OscTypes.cpp
+  IpEndpointName.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\IpEndpointName.cpp(53,8): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\IpEndpointName.cpp(55,8): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\IpEndpointName.cpp(68,9): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\IpEndpointName.cpp(70,9): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\IpEndpointName.cpp(78,9): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\IpEndpointName.cpp(80,9): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+  NetworkingUtils.cpp
+C:\Users\Administrator\Desktop\SonicARray\cpp\third_party\oscpack\ip\win32\NetworkingUtils.cpp(87,25): warning C4996: 'gethostbyname': Use getaddrinfo() or GetAddrInfoW() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
+  UdpSocket.cpp
+  Generating Code...
+  SoundARray.vcxproj -> C:\Users\Administrator\Desktop\SonicARray\cpp\Release\SoundARray.exe
+  Copy speakers.yaml to output dir
