@@ -16,11 +16,11 @@ SonicARray lets you place and drag virtual sound sources inside a real speaker a
 ```
 ┌─────────────────────────────┐   OSC / UDP :7000 (src :7002)   ┌──────────────────────────────┐
 │   Meta Quest 3  (Unity AR)  │ ──────────────────────────────► │   C++ Backend  (PC / Linux)  │
-│                             │                                  │                              │
+│                             │                                 │                              │
 │  • AR passthrough           │ ◄────────────────────────────── │  • VBAP renderer             │
 │  • Drag source balls        │  OSC / UDP :7002 (src :7000)    │  • PortAudio / JACK output   │
-│  • Visualise speaker lines  │                                  │  • Terminal dashboard        │
-└─────────────────────────────┘                                  └──────────────────────────────┘
+│  • Visualise speaker lines  │                                 │  • Terminal dashboard        │
+└─────────────────────────────┘                                 └──────────────────────────────┘
                                                                               │
                                                                        speakers.yaml
                                                                       (speaker layout)
