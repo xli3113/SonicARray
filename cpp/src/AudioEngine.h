@@ -24,7 +24,9 @@ public:
     void SetSourcePosition(int sourceId, float x, float y, float z);
 
     bool LoadAudioFile(const std::string& filepath);
-    void EnableSineWave(bool enable) { useSineWave_ = enable; }
+    bool LoadAudioFile(int sourceId, const std::string& filepath);
+    void EnableSineWave(bool enable);
+    void SetSourceFrequency(int sourceId, float freq);
     void SendSpeakerGainsToUnity();
 
     int GetSampleRate() const { return sampleRate_; }
@@ -47,12 +49,15 @@ private:
     int sampleRate_;
     int numChannels_;
 
-    std::vector<float> audioBuffer_;
-    size_t audioBufferPos_;
-    bool useSineWave_;
-    float sinePhase_;
+    static constexpr int kMaxSources = 8;
 
-    float GenerateSineWave();
+    std::vector<float> audioBuffers_[kMaxSources];
+    size_t audioBufferPos_[kMaxSources];
+    bool useSineWave_[kMaxSources];
+    float sinePhases_[kMaxSources];
+    float sineFreqs_[kMaxSources];
+
+    float GenerateSineWave(int sourceId);
 
     std::atomic<bool>     running_;
     std::atomic<uint64_t> gainsSent_{0};

@@ -1,10 +1,24 @@
 #pragma once
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <windows.h>
+  #include <winsock2.h>
+  using OscSock2 = SOCKET;
+  #define OSC2_INVALID_SOCK INVALID_SOCKET
+#else
+  #include <pthread.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  #include <netinet/tcp.h>
+  using OscSock2 = int;
+  #define OSC2_INVALID_SOCK (-1)
 #endif
-#include <windows.h>
-#include <winsock2.h>
+
 #include <vector>
 #include <atomic>
 
@@ -32,15 +46,23 @@ public:
     int GetConnectedCount() const;
 
 private:
-    static DWORD WINAPI AcceptThreadEntry(LPVOID);
     void AcceptThread();
     void SendToAll(const std::vector<char>& data);
 
     int    port_;
-    SOCKET serverSock_ = INVALID_SOCKET;
+    OscSock2 serverSock_ = OSC2_INVALID_SOCK;
     std::atomic<bool> running_{ false };
-    HANDLE acceptThread_ = NULL;
 
+#ifdef _WIN32
+    static DWORD WINAPI AcceptThreadEntry(LPVOID);
     mutable CRITICAL_SECTION clientsCS_;
+    HANDLE acceptThread_ = NULL;
     std::vector<SOCKET> clients_;
+#else
+    static void* AcceptThreadEntry(void*);
+    mutable pthread_mutex_t clientsCS_;
+    pthread_t acceptThread_{};
+    bool acceptThreadValid_ = false;
+    std::vector<int> clients_;
+#endif
 };

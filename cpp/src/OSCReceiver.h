@@ -1,13 +1,25 @@
 #pragma once
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <windows.h>
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #undef min
+  #undef max
+  using OscSock = SOCKET;
+  #define OSC_INVALID_SOCK INVALID_SOCKET
+#else
+  #include <pthread.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  using OscSock = int;
+  #define OSC_INVALID_SOCK (-1)
 #endif
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#undef min
-#undef max
 
 #include <string>
 #include <atomic>
@@ -59,19 +71,31 @@ public:
 private:
     int replyPort_ = 7002;
     void ListenThread();
-    static DWORD WINAPI ListenThreadEntry(LPVOID param);
 
     // Parse a raw UDP datagram as an OSC packet and fire callbacks.
     void DispatchPacket(const char* data, int len, const sockaddr_in& from);
     void StorePosition(int sourceId, float x, float y, float z);
 
-    // ── socket ──────────────────────────────────────────────────────
+#ifdef _WIN32
+    static DWORD WINAPI ListenThreadEntry(LPVOID param);
     mutable CRITICAL_SECTION socketMutex_;
-    SOCKET rawSock_ = INVALID_SOCKET;  // single socket: recv + send
+    mutable CRITICAL_SECTION sourcesMutex_;
+    mutable CRITICAL_SECTION senderIPMutex_;
+    HANDLE listenThread_ = NULL;
+#else
+    static void* ListenThreadEntry(void* param);
+    mutable pthread_mutex_t socketMutex_;
+    mutable pthread_mutex_t sourcesMutex_;
+    mutable pthread_mutex_t senderIPMutex_;
+    pthread_t listenThread_{};
+    bool listenThreadValid_ = false;
+#endif
+
+    // ── socket ──────────────────────────────────────────────────────────
+    OscSock rawSock_ = OSC_INVALID_SOCK;  // single socket: recv + send
 
     int port_;
     std::atomic<bool> running_;
-    HANDLE listenThread_;
 
     // ── last parsed position ─────────────────────────────────────────
     float lastX_, lastY_, lastZ_;
@@ -79,11 +103,9 @@ private:
     MultiSourcePositionCallback multiSourcePositionCallback_;
 
     // ── per-source position table ─────────────────────────────────────
-    mutable CRITICAL_SECTION sourcesMutex_;
     std::vector<std::array<float, 3>> sourcePositions_;
 
     // ── sender discovery ─────────────────────────────────────────────
-    mutable CRITICAL_SECTION senderIPMutex_;
     std::string lastSenderIP_;
     int         lastSenderPort_ = 0;
 

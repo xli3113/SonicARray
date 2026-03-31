@@ -15,6 +15,10 @@ using UnityEngine.InputSystem;
 /// LEFT HAND:
 ///   Aim ray at existing source, pinch and release → delete source
 ///
+/// BOTH HANDS simultaneously pinch + hold 3 s     → calibrate speaker array to head
+///   Stand at the reference speaker (the one with the cross sticker), then hold the
+///   gesture until "CALIBRATED" appears. The virtual array snaps to your position.
+///
 /// Visual ray: white when idle, green when hovering a source, yellow when creating
 /// </summary>
 public class HandGestureController : MonoBehaviour
@@ -38,6 +42,12 @@ public class HandGestureController : MonoBehaviour
     public float maxRayLength = 8.0f;
     [Tooltip("Left-hand vertical sensitivity for depth adjustment (m/m)")]
     public float depthSensitivity = 4.0f;
+
+    [Header("Calibration")]
+    [Tooltip("Speaker ID that has the cross sticker — must match calibrationReferenceSpeakerId in SpeakerManager")]
+    public int calibrationReferenceSpeakerId = 1;
+    [Tooltip("Seconds both hands must pinch to trigger calibration")]
+    public float calibrationHoldTime = 3.0f;
 
     [Header("Visual Feedback")]
     public GameObject createIndicatorPrefab;
@@ -75,6 +85,12 @@ public class HandGestureController : MonoBehaviour
     private GameObject controllerGrabSource = null;
     private float      controllerGrabDist   = 0f;
 
+    // Calibration state
+    private float        calibrationTimer   = 0f;
+    private bool         calibrationDone    = false;
+    private SpeakerManager speakerManager   = null;
+    private TextMesh     calibrationLabel   = null;
+
     // Mouse fallback
     private GameObject mouseGrabbed   = null;
     private Plane      mouseDragPlane;
@@ -86,20 +102,19 @@ public class HandGestureController : MonoBehaviour
     private bool _prevLPinch = false;
 
     // Visuals
+    private GameObject   indicatorInstance;
     private LineRenderer rRay;
     private LineRenderer lRay;
-    private GameObject   indicatorInstance;
-    private GameObject   rRayDot;   // endpoint dot
+    private GameObject   rRayDot;
     private GameObject   lRayDot;
-    private TextMesh     distLabel;  // floating distance text
 
     private bool ovrRunning = false;
 
     // ── colours ────────────────────────────────────────────────────
-    static readonly Color COL_IDLE    = new Color(1f, 1f, 1f, 0.6f);
-    static readonly Color COL_HIT     = new Color(0f, 1f, 0.3f, 0.9f);
-    static readonly Color COL_CREATE  = new Color(1f, 0.9f, 0f, 0.9f);
-    static readonly Color COL_DELETE  = new Color(1f, 0.2f, 0.2f, 0.9f);
+    static readonly Color COL_IDLE   = new Color(1f, 1f, 1f, 0.6f);
+    static readonly Color COL_HIT    = new Color(0f, 1f, 0.3f, 0.9f);
+    static readonly Color COL_CREATE = new Color(1f, 0.9f, 0f, 0.9f);
+    static readonly Color COL_DELETE = new Color(1f, 0.2f, 0.2f, 0.9f);
 
     // ── lifecycle ──────────────────────────────────────────────────
     void Start()
@@ -110,23 +125,29 @@ public class HandGestureController : MonoBehaviour
         if (cameraRig == null)
             cameraRig = FindObjectOfType<OVRCameraRig>();
 
+        speakerManager = FindObjectOfType<SpeakerManager>();
+        if (speakerManager != null)
+            speakerManager.calibrationReferenceSpeakerId = calibrationReferenceSpeakerId;
+
         mainCamera = Camera.main;
+        calibrationLabel = CreateCalibrationLabel();
 
         indicatorInstance = createIndicatorPrefab != null
             ? Instantiate(createIndicatorPrefab)
-            : CreateDefaultIndicator();
-        indicatorInstance.SetActive(false);
+            : null;
+        if (indicatorInstance != null) indicatorInstance.SetActive(false);
 
         rRay    = CreateRay("RightRay");
         lRay    = CreateRay("LeftRay");
         rRayDot = CreateDot("RightDot");
         lRayDot = CreateDot("LeftDot");
-        distLabel = CreateDistLabel();
     }
 
     void Update()
     {
         ovrRunning = UnityEngine.XR.XRSettings.enabled;
+
+        HandleCalibrationGesture();
 
         bool rOn = ovrRunning && OVRInput.IsControllerConnected(OVRInput.Controller.RHand);
         bool lOn = ovrRunning && OVRInput.IsControllerConnected(OVRInput.Controller.LHand);
@@ -193,22 +214,13 @@ public class HandGestureController : MonoBehaviour
         {
             if (rGrabbed != null)
             {
-                // Drag: keep source on ray at same distance
                 rGrabbed.transform.position = ray.origin + ray.direction * rGrabDistance;
                 DrawRay(rRay, rRayDot, ray, rGrabDistance, COL_HIT);
             }
             else if (!rCreatedThisPinch)
             {
                 float progress = Mathf.Clamp01((Time.time - rPinchStartTime) / createHoldTime);
-
-                // Arm-extension depth: further arm from head → larger endDist
-                float endDist = defaultRayLength;
-
-                indicatorInstance.SetActive(true);
-                indicatorInstance.transform.position   = ray.origin + ray.direction * endDist;
-                indicatorInstance.transform.localScale = Vector3.one * Mathf.Lerp(0.03f, 0.10f, progress);
-                var rend = indicatorInstance.GetComponentInChildren<Renderer>();
-                if (rend != null) rend.material.color = Color.Lerp(Color.white, Color.yellow, progress);
+                float endDist  = defaultRayLength;
 
                 DrawRay(rRay, rRayDot, ray, endDist, COL_CREATE);
 
@@ -216,18 +228,15 @@ public class HandGestureController : MonoBehaviour
                 {
                     CreateSource(ray.origin + ray.direction * endDist);
                     rCreatedThisPinch = true;
-                    indicatorInstance.SetActive(false);
                 }
             }
         }
         else
         {
-            // Idle — show ray with hit highlight; length follows arm extension
-            Color col  = hasHit ? COL_HIT : COL_IDLE;
             float dist = hasHit
                 ? Vector3.Dot(hit.transform.position - ray.origin, ray.direction)
                 : defaultRayLength;
-            DrawRay(rRay, rRayDot, ray, dist, col);
+            DrawRay(rRay, rRayDot, ray, dist, hasHit ? COL_HIT : COL_IDLE);
         }
     }
 
@@ -270,22 +279,6 @@ public class HandGestureController : MonoBehaviour
             defaultRayLength = Mathf.Clamp(
                 lDepthAdjustStartLen + deltaY * depthSensitivity,
                 minRayLength, maxRayLength);
-
-            // Show distance label near right hand endpoint
-            if (distLabel != null)
-            {
-                distLabel.gameObject.SetActive(true);
-                distLabel.text = $"{defaultRayLength:F1} m";
-                // Position it slightly above the right ray dot
-                distLabel.transform.position = rRayDot.transform.position + Vector3.up * 0.08f;
-                if (mainCamera != null)
-                    distLabel.transform.rotation = Quaternion.LookRotation(
-                        distLabel.transform.position - mainCamera.transform.position);
-            }
-        }
-        else if (distLabel != null && distLabel.gameObject.activeSelf)
-        {
-            distLabel.gameObject.SetActive(false);
         }
 
         if (pinchUp && lPinching)
@@ -457,11 +450,6 @@ public class HandGestureController : MonoBehaviour
         lr.SetPosition(0, ray.origin);
         lr.SetPosition(1, ray.origin + ray.direction * length);
         lr.startColor = lr.endColor = col;
-
-        // Keep dash count proportional to length (8 dash-pairs per metre)
-        if (lr.material != null && lr.material.mainTexture != null)
-            lr.material.mainTextureScale = new Vector2(Mathf.Max(1f, length * 8f), 1f);
-
         dot.transform.position = ray.origin + ray.direction * length;
         dot.GetComponent<Renderer>().material.color = col;
     }
@@ -470,22 +458,11 @@ public class HandGestureController : MonoBehaviour
     {
         GameObject go = new GameObject(name);
         LineRenderer lr = go.AddComponent<LineRenderer>();
-
-        // Dotted material: a 2-pixel texture (opaque | transparent) tiled along the ray
+        // Plain solid material — no texture, no wave effect
         Material mat = new Material(Shader.Find("Sprites/Default"));
-        Texture2D dashTex = new Texture2D(2, 1, TextureFormat.RGBA32, false);
-        dashTex.filterMode = FilterMode.Point;
-        dashTex.wrapMode   = TextureWrapMode.Repeat;
-        dashTex.SetPixels(new Color[] { Color.white, new Color(0f, 0f, 0f, 0f) });
-        dashTex.Apply();
-        mat.mainTexture      = dashTex;
-        // ~8 dash pairs per metre; adjusted in DrawRay to stay consistent across lengths
-        mat.mainTextureScale = new Vector2(8f, 1f);
-
         lr.material      = mat;
-        lr.textureMode   = LineTextureMode.Tile;
-        lr.startWidth    = 0.006f;
-        lr.endWidth      = 0.006f;
+        lr.startWidth    = 0.004f;
+        lr.endWidth      = 0.004f;
         lr.positionCount = 2;
         lr.useWorldSpace = true;
         lr.enabled       = false;
@@ -503,15 +480,82 @@ public class HandGestureController : MonoBehaviour
         return obj;
     }
 
-    TextMesh CreateDistLabel()
+    // ── calibration ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Both hands pinch simultaneously → calibration timer counts up.
+    /// Release either hand → timer resets.
+    /// Held for calibrationHoldTime → CalibrateToHead() fires once.
+    /// This gesture is impossible to trigger accidentally during normal
+    /// source creation/deletion (which only ever uses one hand at a time).
+    /// </summary>
+    void HandleCalibrationGesture()
     {
-        GameObject go = new GameObject("DistLabel");
-        TextMesh tm = go.AddComponent<TextMesh>();
-        tm.fontSize    = 48;
-        tm.characterSize = 0.01f;
-        tm.color       = new Color(1f, 0.9f, 0.2f);
-        tm.anchor      = TextAnchor.MiddleCenter;
-        tm.alignment   = TextAlignment.Center;
+        bool rPinch = PluginPinch(OVRPlugin.Hand.HandRight);
+        bool lPinch = PluginPinch(OVRPlugin.Hand.HandLeft);
+        bool bothPinching = rPinch && lPinch;
+
+#if UNITY_EDITOR
+        // Editor fallback: hold both mouse buttons
+        bothPinching = Input.GetMouseButton(0) && Input.GetMouseButton(1);
+#endif
+
+        if (bothPinching)
+        {
+            calibrationTimer += Time.deltaTime;
+            calibrationDone = false;
+
+            float progress = Mathf.Clamp01(calibrationTimer / calibrationHoldTime);
+            ShowCalibrationLabel($"CALIBRATING {Mathf.RoundToInt(progress * 100)}%", Color.yellow);
+
+            if (calibrationTimer >= calibrationHoldTime && !calibrationDone)
+            {
+                calibrationDone = true;
+                calibrationTimer = 0f;
+
+                if (speakerManager != null)
+                    speakerManager.CalibrateToHead();
+
+                ShowCalibrationLabel("CALIBRATED ✓", Color.green);
+                Invoke(nameof(HideCalibrationLabel), 2.0f);
+                Debug.Log("[Calibration] Speaker array aligned to head position.");
+            }
+        }
+        else
+        {
+            if (calibrationTimer > 0f && !calibrationDone)
+                HideCalibrationLabel();
+            calibrationTimer = 0f;
+        }
+    }
+
+    void ShowCalibrationLabel(string text, Color color)
+    {
+        if (calibrationLabel == null || mainCamera == null) return;
+        calibrationLabel.gameObject.SetActive(true);
+        calibrationLabel.text  = text;
+        calibrationLabel.color = color;
+        // Float 0.6 m in front of the camera, slightly above centre
+        Transform cam = mainCamera.transform;
+        calibrationLabel.transform.position = cam.position + cam.forward * 0.6f + cam.up * 0.08f;
+        calibrationLabel.transform.rotation = cam.rotation;
+    }
+
+    void HideCalibrationLabel()
+    {
+        if (calibrationLabel != null)
+            calibrationLabel.gameObject.SetActive(false);
+    }
+
+    TextMesh CreateCalibrationLabel()
+    {
+        GameObject go = new GameObject("CalibrationLabel");
+        TextMesh tm   = go.AddComponent<TextMesh>();
+        tm.fontSize      = 60;
+        tm.characterSize = 0.006f;
+        tm.anchor        = TextAnchor.MiddleCenter;
+        tm.alignment     = TextAlignment.Center;
+        tm.color         = Color.yellow;
         go.SetActive(false);
         return tm;
     }

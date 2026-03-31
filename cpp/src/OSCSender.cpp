@@ -4,6 +4,10 @@
 #include <vector>
 #include <string>
 
+#ifdef _WIN32
+  #pragma comment(lib, "ws2_32.lib")
+#endif
+
 static constexpr size_t kOutputBufferSize = 4096;
 
 // Big-endian helpers (OSC wire format is big-endian)
@@ -35,33 +39,39 @@ static void AppendFloat32BE(std::vector<char>& buf, float v) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 OSCSender::OSCSender(const std::string& host, int port, int srcPort)
-    : sock_(INVALID_SOCKET)
+    : sock_(OSC_SEND_INVALID)
 {
+#ifdef _WIN32
     // Winsock may already be initialised; calling WSAStartup again is safe.
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
 
     sock_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock_ == INVALID_SOCKET) {
-        std::cerr << "OSCSender: socket() failed " << WSAGetLastError() << "\n";
+    if (sock_ == OSC_SEND_INVALID) {
+        std::cerr << "OSCSender: socket() failed\n";
         return;
     }
 
     if (srcPort > 0) {
         // Allow sharing the port with the OSC listener on the same port
+#ifdef _WIN32
         BOOL opt = TRUE;
         setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR,
                    reinterpret_cast<const char*>(&opt), sizeof(opt));
+#else
+        int opt = 1;
+        setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
 
         sockaddr_in bindAddr{};
         bindAddr.sin_family      = AF_INET;
-        bindAddr.sin_port        = htons(static_cast<u_short>(srcPort));
+        bindAddr.sin_port        = htons(static_cast<unsigned short>(srcPort));
         bindAddr.sin_addr.s_addr = INADDR_ANY;
         if (bind(sock_, reinterpret_cast<sockaddr*>(&bindAddr),
-                 sizeof(bindAddr)) == SOCKET_ERROR) {
+                 sizeof(bindAddr)) != 0) {
             std::cerr << "OSCSender: bind(:" << srcPort
-                      << ") failed " << WSAGetLastError()
-                      << " — falling back to ephemeral port\n";
+                      << ") failed — falling back to ephemeral port\n";
             // Non-fatal: we can still send, just without the fixed source port
         } else {
             std::cout << "osc sender bound src=:" << srcPort
@@ -70,19 +80,23 @@ OSCSender::OSCSender(const std::string& host, int port, int srcPort)
     }
 
     dest_.sin_family = AF_INET;
-    dest_.sin_port   = htons(static_cast<u_short>(port));
+    dest_.sin_port   = htons(static_cast<unsigned short>(port));
     dest_.sin_addr.s_addr = inet_addr(host.c_str());
 }
 
 OSCSender::~OSCSender() {
-    if (sock_ != INVALID_SOCKET) {
+    if (sock_ != OSC_SEND_INVALID) {
+#ifdef _WIN32
         closesocket(sock_);
-        sock_ = INVALID_SOCKET;
+#else
+        ::close(sock_);
+#endif
+        sock_ = OSC_SEND_INVALID;
     }
 }
 
 void OSCSender::SendSpeakerGains(int sourceId, const std::vector<float>& gains) {
-    if (sock_ == INVALID_SOCKET || gains.empty()) return;
+    if (sock_ == OSC_SEND_INVALID || gains.empty()) return;
 
     // Build OSC message manually so we are not constrained by UdpTransmitSocket.
     // Format: /spatial/speaker_gains  ,if...f   sourceId  gain[0]...gain[N-1]

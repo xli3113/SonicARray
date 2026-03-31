@@ -1,11 +1,22 @@
 #pragma once
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <windows.h>
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  using OscSendSock = SOCKET;
+  #define OSC_SEND_INVALID INVALID_SOCKET
+#else
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  using OscSendSock = int;
+  #define OSC_SEND_INVALID (-1)
 #endif
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 
 #include <string>
 #include <vector>
@@ -30,6 +41,6 @@ public:
     void SendSpeakerGains(int sourceId, const std::vector<float>& gains);
 
 private:
-    SOCKET      sock_;
+    OscSendSock sock_;
     sockaddr_in dest_;
 };

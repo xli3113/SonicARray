@@ -1,14 +1,19 @@
 #include "OSCReceiver.h"
-#include "osc/OscReceivedElements.h"
-#include "osc/OscTypes.h"
 #include <iostream>
 #include <cstring>
 #include <cstdint>
 #include <algorithm>
 
-#pragma comment(lib, "ws2_32.lib")
+#ifdef _WIN32
+  #pragma comment(lib, "ws2_32.lib")
+#else
+  #include <cerrno>
+  #include <sys/time.h>
+#endif
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── platform helpers ──────────────────────────────────────────────────────────
+
+#ifdef _WIN32
 
 struct CritSectionGuard {
     CRITICAL_SECTION& cs_;
@@ -16,7 +21,24 @@ struct CritSectionGuard {
     ~CritSectionGuard() { LeaveCriticalSection(&cs_); }
 };
 
-// OSC big-endian helpers
+static inline void OscSocketClose(OscSock s) { closesocket(s); }
+static inline int  OscSocketError()          { return WSAGetLastError(); }
+
+#else  // POSIX
+
+struct CritSectionGuard {
+    pthread_mutex_t& cs_;
+    explicit CritSectionGuard(pthread_mutex_t& cs) : cs_(cs) { pthread_mutex_lock(&cs_); }
+    ~CritSectionGuard() { pthread_mutex_unlock(&cs_); }
+};
+
+static inline void OscSocketClose(OscSock s) { ::close(s); }
+static inline int  OscSocketError()          { return errno; }
+
+#endif
+
+// ── OSC big-endian helpers ────────────────────────────────────────────────────
+
 static int32_t ReadInt32BE(const char* p) {
     auto* b = reinterpret_cast<const uint8_t*>(p);
     return (int32_t)(((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16)
@@ -52,27 +74,46 @@ static void AppendF32(std::vector<char>& buf, float v) {
 
 OSCReceiver::OSCReceiver(int port)
     : port_(port), running_(false),
-      listenThread_(NULL), lastX_(0), lastY_(0), lastZ_(0),
+      lastX_(0), lastY_(0), lastZ_(0),
       packetCount_(0)
 {
+#ifdef _WIN32
     WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
+    listenThread_ = NULL;
     InitializeCriticalSection(&socketMutex_);
     InitializeCriticalSection(&sourcesMutex_);
     InitializeCriticalSection(&senderIPMutex_);
+#else
+    pthread_mutex_init(&socketMutex_, nullptr);
+    pthread_mutex_init(&sourcesMutex_, nullptr);
+    pthread_mutex_init(&senderIPMutex_, nullptr);
+#endif
 }
 
 OSCReceiver::~OSCReceiver() {
     Stop();
+#ifdef _WIN32
     DeleteCriticalSection(&socketMutex_);
     DeleteCriticalSection(&sourcesMutex_);
     DeleteCriticalSection(&senderIPMutex_);
+#else
+    pthread_mutex_destroy(&socketMutex_);
+    pthread_mutex_destroy(&sourcesMutex_);
+    pthread_mutex_destroy(&senderIPMutex_);
+#endif
 }
 
 bool OSCReceiver::Start() {
     if (running_) return false;
     running_ = true;
+#ifdef _WIN32
     listenThread_ = CreateThread(NULL, 0, ListenThreadEntry, this, 0, NULL);
     return listenThread_ != NULL;
+#else
+    int rc = pthread_create(&listenThread_, nullptr, ListenThreadEntry, this);
+    listenThreadValid_ = (rc == 0);
+    return listenThreadValid_;
+#endif
 }
 
 void OSCReceiver::Stop() {
@@ -82,48 +123,73 @@ void OSCReceiver::Stop() {
     // Closing the socket unblocks recvfrom in the listen thread
     {
         CritSectionGuard lk(socketMutex_);
-        if (rawSock_ != INVALID_SOCKET) {
-            closesocket(rawSock_);
-            rawSock_ = INVALID_SOCKET;
+        if (rawSock_ != OSC_INVALID_SOCK) {
+            OscSocketClose(rawSock_);
+            rawSock_ = OSC_INVALID_SOCK;
         }
     }
 
+#ifdef _WIN32
     if (listenThread_ != NULL) {
         WaitForSingleObject(listenThread_, 3000);
         CloseHandle(listenThread_);
         listenThread_ = NULL;
     }
+#else
+    if (listenThreadValid_) {
+        pthread_join(listenThread_, nullptr);
+        listenThreadValid_ = false;
+    }
+#endif
 }
 
+#ifdef _WIN32
 DWORD WINAPI OSCReceiver::ListenThreadEntry(LPVOID param) {
     static_cast<OSCReceiver*>(param)->ListenThread();
     return 0;
 }
+#else
+void* OSCReceiver::ListenThreadEntry(void* param) {
+    static_cast<OSCReceiver*>(param)->ListenThread();
+    return nullptr;
+}
+#endif
 
 void OSCReceiver::ListenThread() {
-    SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock == INVALID_SOCKET) {
-        std::cerr << "osc socket create fail " << WSAGetLastError() << "\n";
+    OscSock sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock == OSC_INVALID_SOCK) {
+        std::cerr << "osc socket create fail " << OscSocketError() << "\n";
         return;
     }
 
     // Allow sharing the port (defensive; we're the only user here)
+#ifdef _WIN32
     BOOL opt = TRUE;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
     // 200 ms receive timeout so we can check running_ periodically
     DWORD tv = 200;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+#else
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    // 200 ms receive timeout so we can check running_ periodically
+    struct timeval tv;
+    tv.tv_sec  = 0;
+    tv.tv_usec = 200000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
 
     sockaddr_in bindAddr{};
     bindAddr.sin_family      = AF_INET;
-    bindAddr.sin_port        = htons((u_short)port_);
+    bindAddr.sin_port        = htons((unsigned short)port_);
     bindAddr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(sock, (sockaddr*)&bindAddr, sizeof(bindAddr)) == SOCKET_ERROR) {
+    if (bind(sock, (sockaddr*)&bindAddr, sizeof(bindAddr)) != 0) {
         std::cerr << "osc bind fail port=" << port_
-                  << " err=" << WSAGetLastError() << "\n";
-        closesocket(sock);
+                  << " err=" << OscSocketError() << "\n";
+        OscSocketClose(sock);
         return;
     }
 
@@ -136,17 +202,21 @@ void OSCReceiver::ListenThread() {
     char buf[4096];
     while (running_) {
         sockaddr_in from{};
+#ifdef _WIN32
         int fromLen = sizeof(from);
+#else
+        socklen_t fromLen = sizeof(from);
+#endif
         int n = recvfrom(sock, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
-        if (n <= 0) continue;   // timeout (WSAETIMEDOUT) or error — loop again
+        if (n <= 0) continue;   // timeout or error — loop again
         DispatchPacket(buf, n, from);
     }
-    // Socket already closed in Stop(), or close it here if Stop set rawSock_=INVALID_SOCKET
+    // Socket already closed in Stop(), or close it here if Stop set rawSock_=OSC_INVALID_SOCK
     {
         CritSectionGuard lk(socketMutex_);
-        if (rawSock_ != INVALID_SOCKET) {
-            closesocket(rawSock_);
-            rawSock_ = INVALID_SOCKET;
+        if (rawSock_ != OSC_INVALID_SOCK) {
+            OscSocketClose(rawSock_);
+            rawSock_ = OSC_INVALID_SOCK;
         }
     }
 }
@@ -262,9 +332,9 @@ int OSCReceiver::GetLastSenderPort() const {
 // ── sender ────────────────────────────────────────────────────────────────────
 
 void OSCReceiver::SendSpeakerGains(int sourceId, const std::vector<float>& gains) {
-    SOCKET sock;
+    OscSock sock;
     { CritSectionGuard lk(socketMutex_); sock = rawSock_; }
-    if (sock == INVALID_SOCKET || gains.empty()) return;
+    if (sock == OSC_INVALID_SOCK || gains.empty()) return;
 
     std::string ip;
     int port;
@@ -290,7 +360,7 @@ void OSCReceiver::SendSpeakerGains(int sourceId, const std::vector<float>& gains
 
     sockaddr_in dest{};
     dest.sin_family      = AF_INET;
-    dest.sin_port        = htons((u_short)port);
+    dest.sin_port        = htons((unsigned short)port);
     dest.sin_addr.s_addr = inet_addr(ip.c_str());
 
     sendto(sock, buf.data(), (int)buf.size(), 0,

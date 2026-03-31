@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 #include <cmath>
+#include <algorithm>
+#include <chrono>
+#include <thread>
 #include "ConfigLoader.h"
 #include "AudioEngine.h"
 #include "SpatialRenderer.h"
@@ -13,6 +16,17 @@
 #include <windows.h>
 #include <conio.h>
 #endif
+
+// Cross-platform tick counter (milliseconds since an arbitrary epoch)
+static uint32_t GetTickMs() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(
+        steady_clock::now().time_since_epoch()).count();
+}
+
+static void SleepMs(int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 #define A_RESET  "\033[0m"
@@ -76,7 +90,7 @@ static std::string FormatUptime(uint32_t sec)
 // ── Dashboard state (persisted across calls) ─────────────────────────────────
 static int      s_dashLines    = 0;   // lines last printed (for cursor-up)
 static uint64_t s_lastPktCount = 0;
-static DWORD    s_lastPktTick  = 0;
+static uint32_t s_lastPktTick  = 0;
 static double   s_oscRate      = 0.0; // packets / second
 
 // Previous speaker-gain snapshot — redraw only when this changes
@@ -88,11 +102,11 @@ static void PrintDashboard(
     OSCReceiver*               oscReceiver,
     AudioEngine*               engine,
     const std::vector<Speaker>& speakers,
-    DWORD                       startTick)
+    uint32_t                    startTick)
 {
     // ── update pkt/s ──
     uint64_t curPkt  = oscReceiver ? oscReceiver->GetPacketCount() : 0;
-    DWORD    nowTick = GetTickCount();
+    uint32_t nowTick = GetTickMs();
     if (s_lastPktTick > 0) {
         double dt = (nowTick - s_lastPktTick) / 1000.0;
         if (dt > 0.0) s_oscRate = (curPkt - s_lastPktCount) / dt;
@@ -270,11 +284,21 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    if (argc > 2) {
-        engine.LoadAudioFile(argv[2]);
-    } else {
+    // Audio setup:
+    //   No extra args      → 8 sine waves at C major scale (C4–C5)
+    //   1 .wav arg          → that file on src0, remaining srcs use sine waves
+    //   Up to 8 .wav args   → each file assigned to src0..srcN
+    int numWavArgs = argc - 2;
+    if (numWavArgs <= 0) {
         engine.EnableSineWave(true);
-        std::cout << "Audio: sine wave  (pass a .wav as 2nd argument to use a file)\n";
+        std::cout << "Audio: sine waves — C4 D4 E4 F4 G4 A4 B4 C5\n";
+    } else {
+        for (int i = 0; i < numWavArgs && i < 8; ++i) {
+            if (!engine.LoadAudioFile(i, argv[2 + i]))
+                std::cerr << "Warning: failed to load " << argv[2 + i]
+                          << " for src" << i << ", using sine wave\n";
+        }
+        std::cout << "Audio: loaded " << numWavArgs << " wav file(s)\n";
     }
 
     if (!engine.Start()) {
@@ -289,14 +313,14 @@ int main(int argc, char* argv[])
     SpatialRenderer* renderer    = engine.GetRenderer();
     OSCReceiver*     oscReceiver = engine.GetOSCReceiver();
 
-    DWORD startTick   = GetTickCount();
-    DWORD lastDashTick = startTick;
-    bool  shouldExit  = false;
+    uint32_t startTick   = GetTickMs();
+    uint32_t lastDashTick = startTick;
+    bool     shouldExit  = false;
 
     while (!shouldExit && renderer != nullptr) {
-        Sleep(50);
+        SleepMs(50);
 
-        DWORD now = GetTickCount();
+        uint32_t now = GetTickMs();
         if (now - lastDashTick >= 500) {
             engine.SendSpeakerGainsToUnity();
             PrintDashboard(renderer, oscReceiver, &engine, speakers, startTick);

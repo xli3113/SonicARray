@@ -43,12 +43,22 @@ bool LoadWavFile(const std::string& filepath, std::vector<float>& buffer, int& s
     return true;
 }
 
+// C major scale: C4 D4 E4 F4 G4 A4 B4 C5
+static constexpr float kDefaultScale[8] = {
+    261.63f, 293.66f, 329.63f, 349.23f,
+    392.00f, 440.00f, 493.88f, 523.25f
+};
+
 AudioEngine::AudioEngine()
     : oscReceiver_(nullptr), tcpSender_(nullptr),
-      sampleRate_(44100), numChannels_(0), audioBufferPos_(0),
-      useSineWave_(true), running_(false) {
+      sampleRate_(44100), numChannels_(0), running_(false) {
 
-    sinePhase_ = 0.0f;
+    for (int i = 0; i < kMaxSources; ++i) {
+        audioBufferPos_[i] = 0;
+        useSineWave_[i]    = true;
+        sinePhases_[i]     = 0.0f;
+        sineFreqs_[i]      = kDefaultScale[i];
+    }
 }
 
 AudioEngine::~AudioEngine() {
@@ -153,20 +163,15 @@ void AudioEngine::SetRenderer(std::unique_ptr<SpatialRenderer> renderer) {
     }
 }
 
-bool AudioEngine::LoadAudioFile(const std::string& filepath) {
+static bool LoadAndResample(const std::string& filepath, int targetRate,
+                            std::vector<float>& out) {
     int fileSampleRate = 0;
     std::vector<float> buffer;
+    if (!LoadWavFile(filepath, buffer, fileSampleRate)) return false;
 
-    if (!LoadWavFile(filepath, buffer, fileSampleRate)) {
-        std::cerr << "load wav fail " << filepath << "\n";
-        return false;
-    }
-
-    if (fileSampleRate != sampleRate_) {
-        std::vector<float> resampled;
-        float ratio = static_cast<float>(sampleRate_) / fileSampleRate;
-        resampled.resize(static_cast<size_t>(buffer.size() * ratio));
-
+    if (fileSampleRate != targetRate) {
+        float ratio = static_cast<float>(targetRate) / fileSampleRate;
+        std::vector<float> resampled(static_cast<size_t>(buffer.size() * ratio));
         for (size_t i = 0; i < resampled.size(); ++i) {
             float srcIdx = i / ratio;
             size_t idx0 = static_cast<size_t>(srcIdx);
@@ -174,26 +179,50 @@ bool AudioEngine::LoadAudioFile(const std::string& filepath) {
             float t = srcIdx - idx0;
             resampled[i] = buffer[idx0] * (1.0f - t) + buffer[idx1] * t;
         }
-
         buffer = resampled;
     }
-
-    audioBuffer_ = buffer;
-    audioBufferPos_ = 0;
-    useSineWave_ = false;
-
-    std::cout << "loaded " << filepath << " " << buffer.size() << " samps\n";
-
+    out = std::move(buffer);
     return true;
 }
 
-float AudioEngine::GenerateSineWave() {
+bool AudioEngine::LoadAudioFile(const std::string& filepath) {
+    return LoadAudioFile(0, filepath);
+}
+
+bool AudioEngine::LoadAudioFile(int sourceId, const std::string& filepath) {
+    if (sourceId < 0 || sourceId >= kMaxSources) return false;
+
+    std::vector<float> buffer;
+    if (!LoadAndResample(filepath, sampleRate_, buffer)) {
+        std::cerr << "load wav fail " << filepath << "\n";
+        return false;
+    }
+
+    audioBuffers_[sourceId]    = std::move(buffer);
+    audioBufferPos_[sourceId]  = 0;
+    useSineWave_[sourceId]     = false;
+
+    std::cout << "src" << sourceId << " loaded " << filepath
+              << " " << audioBuffers_[sourceId].size() << " samps\n";
+    return true;
+}
+
+void AudioEngine::EnableSineWave(bool enable) {
+    for (int i = 0; i < kMaxSources; ++i)
+        useSineWave_[i] = enable;
+}
+
+void AudioEngine::SetSourceFrequency(int sourceId, float freq) {
+    if (sourceId >= 0 && sourceId < kMaxSources)
+        sineFreqs_[sourceId] = freq;
+}
+
+float AudioEngine::GenerateSineWave(int sourceId) {
     constexpr float kPi = 3.14159265358979323846f;
-    constexpr float kFreq = 440.0f;
-    float inc = 2.0f * kPi * kFreq / static_cast<float>(sampleRate_);
-    sinePhase_ += inc;
-    if (sinePhase_ >= 2.0f * kPi) sinePhase_ -= 2.0f * kPi;
-    return std::sin(sinePhase_) * 0.2f;
+    float inc = 2.0f * kPi * sineFreqs_[sourceId] / static_cast<float>(sampleRate_);
+    sinePhases_[sourceId] += inc;
+    if (sinePhases_[sourceId] >= 2.0f * kPi) sinePhases_[sourceId] -= 2.0f * kPi;
+    return std::sin(sinePhases_[sourceId]) * 0.2f;
 }
 
 void AudioEngine::ProcessAudioPlanar(float** outChannels, unsigned long nframes) {
@@ -210,28 +239,23 @@ void AudioEngine::ProcessAudioPlanar(float** outChannels, unsigned long nframes)
     int maxSources = renderer_->GetMaxSources();
 
     for (unsigned long i = 0; i < nframes; ++i) {
-        float sample = 0.0f;
-
-        if (useSineWave_) {
-            sample = GenerateSineWave();
-        } else if (!audioBuffer_.empty()) {
-            if (audioBufferPos_ < audioBuffer_.size()) {
-                sample = audioBuffer_[audioBufferPos_];
-                audioBufferPos_++;
-            } else {
-                audioBufferPos_ = 0;
-                sample = audioBuffer_[audioBufferPos_];
-                audioBufferPos_++;
-            }
-        }
-
         for (int s = 0; s < maxSources; ++s) {
             const std::vector<float>& gains = renderer_->GetGainsForSource(s);
             if (static_cast<int>(gains.size()) != numChannels_) continue;
+
+            float sample = 0.0f;
+            if (useSineWave_[s]) {
+                sample = GenerateSineWave(s);
+            } else if (!audioBuffers_[s].empty()) {
+                sample = audioBuffers_[s][audioBufferPos_[s]];
+                audioBufferPos_[s]++;
+                if (audioBufferPos_[s] >= audioBuffers_[s].size())
+                    audioBufferPos_[s] = 0;
+            }
+
             for (int ch = 0; ch < numChannels_; ++ch) {
-                if (outChannels[ch]) {
+                if (outChannels[ch])
                     outChannels[ch][i] += sample * gains[ch];
-                }
             }
         }
     }

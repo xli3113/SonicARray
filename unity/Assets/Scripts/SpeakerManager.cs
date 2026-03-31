@@ -22,7 +22,7 @@ public class SpeakerManager : MonoBehaviour {
     [Header("Backend Connection")]
     [Tooltip("IP address of the PC running the C++ VBAP backend. " +
              "Quest sends OSC to this IP on port 7000. Use 127.0.0.1 only when running both on the same machine.")]
-    public string backendIP = "192.168.137.1";
+    public string backendIP = "10.10.10.3";
     public Material defaultMaterial;
     public Material activeMaterial;
     
@@ -55,20 +55,18 @@ public class SpeakerManager : MonoBehaviour {
         // Current head position in world space
         Vector3 headPos = cam.transform.position;
         // Where the virtual reference speaker currently sits relative to array origin
-        Vector3 speakerLocalPos = new Vector3(refSpk.x, refSpk.y, refSpk.z);
+        Vector3 speakerLocalPos = new Vector3(refSpk.x, refSpk.z, refSpk.y);
 
         // Required offset: head should coincide with reference speaker world position
         // worldPos = arrayOriginOffset + speakerLocalPos  →  arrayOriginOffset = headPos - speakerLocalPos
         arrayOriginOffset = headPos - speakerLocalPos;
         transform.position = arrayOriginOffset;
 
-        // Rebuild world positions for all speaker objects
-        for (int i = 0; i < speakerObjects.Count && i < speakers.Count; i++) {
-            SpeakerData spk = speakers[i];
-            Vector3 newPos = arrayOriginOffset + new Vector3(spk.x, spk.y, spk.z);
-            speakerObjects[i].transform.position = newPos;
+        // Speakers use localPosition — moving the parent (transform) automatically
+        // repositions all children. Just refresh the cached world basePosition.
+        for (int i = 0; i < speakerObjects.Count; i++) {
             SpeakerVisualData vd = speakerObjects[i].GetComponent<SpeakerVisualData>();
-            if (vd != null) vd.basePosition = newPos;
+            if (vd != null) vd.basePosition = speakerObjects[i].transform.position;
         }
 
         Debug.Log($"[SpeakerManager] Calibrated: arrayOriginOffset={arrayOriginOffset} (ref spk {calibrationReferenceSpeakerId} → head at {headPos})");
@@ -303,15 +301,22 @@ public class SpeakerManager : MonoBehaviour {
         }
         
         obj.name = $"Speaker_{speaker.id}";
-        obj.transform.position = new Vector3(speaker.x, speaker.y, speaker.z);
-        
+
+        // Parent first so localPosition = position relative to array center.
+        // This ensures source directions (ball - SpeakerManager.position) always
+        // match YAML directions regardless of arrayOriginOffset.
+        obj.transform.SetParent(transform);
+
+        // YAML/C++ convention: x=left-right, y=forward-back, z=height
+        // Unity convention:    X=left-right, Y=up,           Z=forward
+        obj.transform.localPosition = new Vector3(speaker.x, speaker.z, speaker.y);
+
         // 设置长方体尺寸
         obj.transform.localScale = new Vector3(
             speakerBaseSize.x * speakerScale,
             speakerBaseSize.y * speakerScale,
             speakerBaseSize.z * speakerScale
         );
-        obj.transform.SetParent(transform);
         
         // 存储原始位置和尺寸（用于高度动画）
         SpeakerVisualData visualData = obj.AddComponent<SpeakerVisualData>();
@@ -438,13 +443,14 @@ public class SpeakerManager : MonoBehaviour {
                         ? new Material(activeMaterial)
                         : new Material(Shader.Find("Standard"));
                 }
-                // Blend from a dark base up to full source color at peak gain
-                Color col = Color.Lerp(sourceColor * 0.3f, sourceColor, gain);
+                // Use full-brightness blended color so mixing is clearly visible.
+                // Emission is also set so the color is visible regardless of scene lighting.
+                Color col = sourceColor;
                 col.a = 1f;
                 renderer.material.color = col;
                 if (renderer.material.HasProperty("_EmissionColor")) {
                     renderer.material.EnableKeyword("_EMISSION");
-                    renderer.material.SetColor("_EmissionColor", sourceColor * gain * 0.6f);
+                    renderer.material.SetColor("_EmissionColor", sourceColor * 0.8f);
                 }
             } else if (defaultMaterial != null) {
                 renderer.material = defaultMaterial;
@@ -465,19 +471,24 @@ public class SpeakerManager : MonoBehaviour {
         int dbgTop1id = -1, dbgTop2id = -1, dbgTop3id = -1;
 
         for (int i = 0; i < speakers.Count; i++) {
-            float maxGain = 0f;
-            int dominantSource = -1;
+            float maxGain    = 0f;
+            Color blended    = new Color(0f, 0f, 0f, 0f);  // zero alpha avoids polluting the blend
+            float totalGain  = 0f;
+
             foreach (var kvp in sourceGains) {
-                if (i < kvp.Value.Length && kvp.Value[i] > maxGain) {
-                    maxGain = kvp.Value[i];
-                    dominantSource = kvp.Key;
+                if (i >= kvp.Value.Length) continue;
+                float g = kvp.Value[i];
+                if (g > maxGain) maxGain = g;
+                // Option D: accumulate each source's color weighted by its gain
+                if (g > 0f && sourceColors.TryGetValue(kvp.Key, out Color sc)) {
+                    blended   += sc * g;
+                    totalGain += g;
                 }
             }
-            Color dominantColor = Color.white;
-            if (dominantSource >= 0 && sourceColors.TryGetValue(dominantSource, out Color sc)) {
-                dominantColor = sc;
-            }
-            UpdateSpeakerState(speakers[i].id, maxGain, dominantColor);
+
+            // Normalize blended color; fall back to white if no source active
+            Color finalColor = totalGain > 1e-4f ? blended / totalGain : Color.white;
+            UpdateSpeakerState(speakers[i].id, maxGain, finalColor);
 
             #if UNITY_EDITOR
             if (maxGain > 0.01f) activeAfterMerge++;

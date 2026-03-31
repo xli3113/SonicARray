@@ -173,8 +173,13 @@ public class SpatialSource : MonoBehaviour {
     void SendOSCPosition() {
         if (!enableOSC || oscReceiver == null) return;
 
-        Camera cam = Camera.main;
-        Vector3 listenerPos = cam != null ? cam.transform.position : Vector3.zero;
+        // Use the speaker array center as the VBAP listener reference.
+        // The C++ backend treats YAML (0,0,0) as the listener; speaker positions
+        // are in that frame. Computing rel from the array center (SpeakerManager)
+        // keeps directions correct regardless of arrayOriginOffset or camera position.
+        Vector3 listenerPos = speakerManager != null
+            ? speakerManager.transform.position
+            : Vector3.zero;
         Vector3 rel = transform.position - listenerPos;
         // Swap y and z: Unity y=height,z=forward → C++ y=forward,z=height
         // Sends FROM port 7002 (OSCReceiver socket) → creates conntrack entry
