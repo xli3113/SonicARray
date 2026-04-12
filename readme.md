@@ -41,6 +41,7 @@ SonicARray lets you place and drag virtual sound sources inside a real speaker a
 - **Flexible speaker layout** — edit `speakers.yaml`; no recompile needed
 - **Cross-platform backend** — PortAudio on Windows/macOS, JACK on Linux
 - **Hand-tracking & controller** support via Meta XR SDK
+- **Adjustable source ball size** — `sourceScale` on each `SpatialSource` controls the visual radius of the sphere in world space (metres) and the grab collider radius, letting you tune the ball size to match your physical room scale
 
 ---
 
@@ -48,14 +49,31 @@ SonicARray lets you place and drag virtual sound sources inside a real speaker a
 
 ```
 SonicARray/
-├── cpp/                       # C++ backend
-│   ├── src/                   # AudioEngine, VBAPRenderer, OSCReceiver, …
-│   ├── third_party/           # oscpack, portaudio (vendored)
-│   └── CMakeLists.txt
-├── unity/                     # Unity AR frontend (Meta Quest 3)
-│   └── Assets/Scripts/        # SpatialSource.cs, SpeakerManager.cs, OSCReceiver.cs, …
-├── speakers.yaml              # Speaker layout (edit for your room)
-└── user_study_draft.md        # Research protocol
+├── cpp/                            # C++ backend
+│   ├── src/
+│   │   ├── main.cpp                # Entry point; starts audio stream and terminal dashboard
+│   │   ├── AudioEngine.{h,cpp}     # PortAudio / JACK stream lifecycle management
+│   │   ├── VBAPRenderer.{h,cpp}    # VBAP gain computation; supports up to 8 simultaneous sources
+│   │   ├── OSCReceiver.{h,cpp}     # UDP socket bound to :7000; parses /spatial/source_pos
+│   │   └── OSCSender.{h,cpp}       # Sends /spatial/speaker_gains back to the Quest on :7002
+│   ├── third_party/
+│   │   ├── oscpack/                # OSC encoding & decoding (vendored, BSD/MIT-like)
+│   │   └── portaudio/              # PortAudio cross-platform audio I/O (vendored, MIT)
+│   └── CMakeLists.txt              # Builds SoundARray binary; auto-copies speakers.yaml to output
+├── unity/                          # Unity AR frontend (Meta Quest 3)
+│   └── Assets/
+│       ├── Scenes/
+│       │   └── MainScene.unity     # Main AR scene with SpeakerManager and source prefabs
+│       └── Scripts/
+│           ├── SpatialSource.cs    # Per-source ball: OSC send, gain-weighted line drawing, sourceScale
+│           ├── SpeakerManager.cs   # Loads speakers.yaml at runtime; stores per-source gain tables
+│           ├── OSCReceiver.cs      # Single UDP socket (:7002) used for both sending and receiving
+│           ├── HandGestureController.cs  # Hand-tracking and controller drag input logic
+│           ├── OSCClient.cs        # Low-level OSC packet serialisation
+│           ├── ARPassthroughSetup.cs     # Enables Meta Quest passthrough layer
+│           └── …                   # VRStatusPanel, GazeExitButton, StreamingAssetsHelper, …
+├── speakers.yaml                   # Speaker layout (edit for your room; no recompile needed)
+└── user_study_draft.md             # Research protocol and user study design
 ```
 
 ---
@@ -157,7 +175,8 @@ The project ships with a 13-speaker layout derived from the Couch 204 IEM AllRAD
 3. Open `Assets/Scenes/MainScene.unity`.
 4. Select the **SpeakerManager** GameObject and set **Backend IP** to your PC's local IP address.
 5. Copy `speakers.yaml` into `Assets/StreamingAssets/` so the app can load the layout at runtime.
-6. Connect your Quest 3 and click **File → Build Settings → Android → Build and Run**.
+6. (Optional) Select a **SpatialSource** prefab and adjust the **Source Scale** field (default `0.15 m`) to match your room scale. This controls both the rendered sphere radius and the grab collider size.
+7. Connect your Quest 3 and click **File → Build Settings → Android → Build and Run**.
 
 > **Network note:** Both devices must be on the same Wi-Fi network. All communication is UDP — the backend uses a single socket on port 7000 for both receiving positions and replying with gains. On Windows, run `open_firewall.bat` as administrator to open port 7000.
 
