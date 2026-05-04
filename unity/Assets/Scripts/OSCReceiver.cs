@@ -21,7 +21,7 @@ public class OSCReceiver : MonoBehaviour {
     public int listenPort = 7002;
 
     [Header("Backend")]
-    public string backendIP   = "10.10.10.3";
+    public string backendIP   = "10.10.10.5";
     public int    backendPort = 7000;
 
     private UdpClient udpClient;

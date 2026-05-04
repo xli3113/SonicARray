@@ -452,7 +452,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SpeakerManager
   yamlFilePath: speakers.yaml
   speakerPrefab: {fileID: 0}
-  backendIP: 10.10.10.5
+  backendIP: 10.10.10.3
   defaultMaterial: {fileID: 2100000, guid: 36264e98a4d914746bd19b00e07a31bf, type: 2}
   activeMaterial: {fileID: 2100000, guid: 57817b26ea0526745830df59e5d10f1a, type: 2}
   arrayOriginOffset: {x: 0, y: 0, z: 2}
@@ -491,7 +491,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::OSCReceiver
   listenPort: 7001
-  backendIP: 10.10.10.5
+  backendIP: 10.10.10.3
   backendPort: 7000
 --- !u!114 &1329432861
 MonoBehaviour:

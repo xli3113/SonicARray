@@ -22,7 +22,7 @@ public class SpeakerManager : MonoBehaviour {
     [Header("Backend Connection")]
     [Tooltip("IP address of the PC running the C++ VBAP backend. " +
              "Quest sends OSC to this IP on port 7000. Use 127.0.0.1 only when running both on the same machine.")]
-    public string backendIP = "10.10.10.3";
+    public string backendIP = "10.10.10.5";
     public Material defaultMaterial;
     public Material activeMaterial;
     
@@ -34,42 +34,85 @@ public class SpeakerManager : MonoBehaviour {
              "for test/debug scenes). Disable for AR so the array stays fixed in the room.")]
     public bool followHeadMovement = false;
 
-    [Header("AR Calibration")]
-    [Tooltip("Speaker ID of the physical reference speaker used for calibration. " +
-             "Walk to this speaker and call CalibrateToHead() to align the virtual array.")]
-    public int calibrationReferenceSpeakerId = 0;
+    [Header("AR Calibration (Two-Point)")]
+    [Tooltip("Speaker ID of the first reference speaker (lowest level). Walk here first and call CalibrateStep1().")]
+    public int calibrationSpeakerIdA = 1;
+    [Tooltip("Speaker ID of the second reference speaker (lowest level). Walk here second and call CalibrateStep2().")]
+    public int calibrationSpeakerIdB = 3;
+
+    // Head position recorded during step 1
+    private Vector3 _calibHeadPosA;
+    private bool _calibStep1Done = false;
 
     /// <summary>
-    /// Calibration: shifts arrayOriginOffset so the virtual speaker <calibrationReferenceSpeakerId>
-    /// aligns with the current head (camera) position. Walk up to the physical reference speaker,
-    /// then call this (e.g., from a UI button or gesture).
+    /// Step 1: Walk to the physical speaker matching calibrationSpeakerIdA and call this.
+    /// Records your head position. Then walk to speaker B and call CalibrateStep2().
     /// </summary>
-    public void CalibrateToHead() {
+    public void CalibrateStep1() {
         Camera cam = Camera.main;
-        if (cam == null) { Debug.LogError("[SpeakerManager] No main camera for calibration."); return; }
+        if (cam == null) { Debug.LogError("[SpeakerManager] No main camera."); return; }
 
-        // Find the YAML position of the reference speaker
-        SpeakerData refSpk = speakers.Find(s => s.id == calibrationReferenceSpeakerId);
-        if (refSpk == null) { Debug.LogError($"[SpeakerManager] Calibration speaker {calibrationReferenceSpeakerId} not found."); return; }
+        SpeakerData spkA = speakers.Find(s => s.id == calibrationSpeakerIdA);
+        if (spkA == null) { Debug.LogError($"[SpeakerManager] Speaker {calibrationSpeakerIdA} not found."); return; }
 
-        // Current head position in world space
-        Vector3 headPos = cam.transform.position;
-        // Where the virtual reference speaker currently sits relative to array origin
-        Vector3 speakerLocalPos = new Vector3(refSpk.x, refSpk.z, refSpk.y);
+        _calibHeadPosA = cam.transform.position;
+        _calibStep1Done = true;
+        Debug.Log($"[SpeakerManager] Calibration step 1 done: head={_calibHeadPosA} at speaker {calibrationSpeakerIdA}. Now walk to speaker {calibrationSpeakerIdB} and call CalibrateStep2().");
+    }
 
-        // Required offset: head should coincide with reference speaker world position
-        // worldPos = arrayOriginOffset + speakerLocalPos  →  arrayOriginOffset = headPos - speakerLocalPos
-        arrayOriginOffset = headPos - speakerLocalPos;
+    /// <summary>
+    /// Step 2: Walk to the physical speaker matching calibrationSpeakerIdB and call this.
+    /// Computes both position and rotation of the array from the two head positions.
+    /// </summary>
+    public void CalibrateStep2() {
+        if (!_calibStep1Done) { Debug.LogError("[SpeakerManager] Call CalibrateStep1() first."); return; }
+
+        Camera cam = Camera.main;
+        if (cam == null) { Debug.LogError("[SpeakerManager] No main camera."); return; }
+
+        SpeakerData spkA = speakers.Find(s => s.id == calibrationSpeakerIdA);
+        SpeakerData spkB = speakers.Find(s => s.id == calibrationSpeakerIdB);
+        if (spkA == null || spkB == null) {
+            Debug.LogError($"[SpeakerManager] Speaker {calibrationSpeakerIdA} or {calibrationSpeakerIdB} not found.");
+            return;
+        }
+
+        Vector3 headPosB = cam.transform.position;
+
+        // Convert YAML coords to Unity space: YAML (x, y, z) → Unity (x, z, y)
+        Vector3 localA = new Vector3(spkA.x, spkA.z, spkA.y);
+        Vector3 localB = new Vector3(spkB.x, spkB.z, spkB.y);
+
+        // Horizontal direction between the two speakers in YAML/Unity space
+        Vector3 yamlDir = localB - localA;
+        yamlDir.y = 0f;
+
+        // Horizontal direction between the two head positions in world space
+        Vector3 realDir = headPosB - _calibHeadPosA;
+        realDir.y = 0f;
+
+        if (yamlDir.magnitude < 0.01f || realDir.magnitude < 0.01f) {
+            Debug.LogError("[SpeakerManager] Calibration points too close together.");
+            return;
+        }
+
+        // Rotation that maps YAML layout direction onto the real-world direction
+        Quaternion rot = Quaternion.FromToRotation(yamlDir.normalized, realDir.normalized);
+        transform.rotation = rot;
+
+        // Position: after rotation, virtual speaker A must coincide with head position A
+        // worldPos(A) = transform.position + rot * localA = _calibHeadPosA
+        arrayOriginOffset = _calibHeadPosA - rot * localA;
         transform.position = arrayOriginOffset;
 
-        // Speakers use localPosition — moving the parent (transform) automatically
-        // repositions all children. Just refresh the cached world basePosition.
+        // Refresh cached world basePositions for all speaker visuals
         for (int i = 0; i < speakerObjects.Count; i++) {
             SpeakerVisualData vd = speakerObjects[i].GetComponent<SpeakerVisualData>();
             if (vd != null) vd.basePosition = speakerObjects[i].transform.position;
         }
 
-        Debug.Log($"[SpeakerManager] Calibrated: arrayOriginOffset={arrayOriginOffset} (ref spk {calibrationReferenceSpeakerId} → head at {headPos})");
+        _calibStep1Done = false;
+        Debug.Log($"[SpeakerManager] Two-point calibration done: rotation={rot.eulerAngles} offset={arrayOriginOffset}");
     }
 
     [Header("Visual Settings")]

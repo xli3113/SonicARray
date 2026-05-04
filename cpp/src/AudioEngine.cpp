@@ -222,7 +222,11 @@ float AudioEngine::GenerateSineWave(int sourceId) {
     float inc = 2.0f * kPi * sineFreqs_[sourceId] / static_cast<float>(sampleRate_);
     sinePhases_[sourceId] += inc;
     if (sinePhases_[sourceId] >= 2.0f * kPi) sinePhases_[sourceId] -= 2.0f * kPi;
-    return std::sin(sinePhases_[sourceId]) * 0.2f;
+    // Triangle wave: rises from -1 to 1 in first half, falls from 1 to -1 in second half
+    float phase = sinePhases_[sourceId];
+    float tri = (phase < kPi) ? (phase / (kPi * 0.5f) - 1.0f)
+                              : (3.0f - phase / (kPi * 0.5f));
+    return tri * 0.2f;
 }
 
 void AudioEngine::ProcessAudioPlanar(float** outChannels, unsigned long nframes) {

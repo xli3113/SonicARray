@@ -291,7 +291,7 @@ int main(int argc, char* argv[])
     int numWavArgs = argc - 2;
     if (numWavArgs <= 0) {
         engine.EnableSineWave(true);
-        std::cout << "Audio: sine waves — C4 D4 E4 F4 G4 A4 B4 C5\n";
+        std::cout << "Audio: triangle waves — C4 D4 E4 F4 G4 A4 B4 C5\n";
     } else {
         for (int i = 0; i < numWavArgs && i < 8; ++i) {
             if (!engine.LoadAudioFile(i, argv[2 + i]))

@@ -44,10 +44,10 @@ public class HandGestureController : MonoBehaviour
     public float depthSensitivity = 4.0f;
 
     [Header("Calibration")]
-    [Tooltip("Speaker ID that has the cross sticker — must match calibrationReferenceSpeakerId in SpeakerManager")]
-    public int calibrationReferenceSpeakerId = 1;
-    [Tooltip("Seconds both hands must pinch to trigger calibration")]
+    [Tooltip("Seconds both hands must pinch to confirm each calibration step")]
     public float calibrationHoldTime = 3.0f;
+    [Tooltip("Seconds both hands must pinch to cancel and restart calibration from step 1")]
+    public float calibrationCancelTime = 5.0f;
 
     [Header("Visual Feedback")]
     public GameObject createIndicatorPrefab;
@@ -88,6 +88,8 @@ public class HandGestureController : MonoBehaviour
     // Calibration state
     private float        calibrationTimer   = 0f;
     private bool         calibrationDone    = false;
+    private bool         bothHandsPinching_ = false;
+    private int          calibrationPhase   = 0;   // 0=idle, 1=step1 done (waiting for step2)
     private SpeakerManager speakerManager   = null;
     private TextMesh     calibrationLabel   = null;
 
@@ -126,8 +128,6 @@ public class HandGestureController : MonoBehaviour
             cameraRig = FindObjectOfType<OVRCameraRig>();
 
         speakerManager = FindObjectOfType<SpeakerManager>();
-        if (speakerManager != null)
-            speakerManager.calibrationReferenceSpeakerId = calibrationReferenceSpeakerId;
 
         mainCamera = Camera.main;
         calibrationLabel = CreateCalibrationLabel();
@@ -159,11 +159,20 @@ public class HandGestureController : MonoBehaviour
 
         if (rOn || lOn)
         {
-            if (rOn) HandleRightRay();
-            else     ResetRight();
+            if (bothHandsPinching_)
+            {
+                ResetRight();
+                lPinching    = false;
+                lDepthAdjust = false;
+            }
+            else
+            {
+                if (rOn) HandleRightRay();
+                else     ResetRight();
 
-            if (lOn) HandleLeftRay();
-            else     lPinching = false;
+                if (lOn) HandleLeftRay();
+                else     lPinching = false;
+            }
         }
         else if (ovrRunning)
         {
@@ -483,50 +492,93 @@ public class HandGestureController : MonoBehaviour
     // ── calibration ────────────────────────────────────────────────
 
     /// <summary>
-    /// Both hands pinch simultaneously → calibration timer counts up.
-    /// Release either hand → timer resets.
-    /// Held for calibrationHoldTime → CalibrateToHead() fires once.
-    /// This gesture is impossible to trigger accidentally during normal
-    /// source creation/deletion (which only ever uses one hand at a time).
+    /// Two-step calibration via both-hands pinch gesture:
+    ///
+    ///   Phase 0 — Stand at speaker #1, both hands pinch + hold 3 s → CalibrateStep1()
+    ///   Phase 1 — Walk to speaker #2, both hands pinch + hold 3 s → CalibrateStep2()
+    ///
+    ///   At any phase: hold 5 s (calibrationCancelTime) → cancel and restart from step 1
+    ///   PC debug: press R to reset to phase 0 instantly
     /// </summary>
     void HandleCalibrationGesture()
     {
+        // PC debug reset
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            ResetCalibration();
+            return;
+        }
+
         bool rPinch = PluginPinch(OVRPlugin.Hand.HandRight);
         bool lPinch = PluginPinch(OVRPlugin.Hand.HandLeft);
         bool bothPinching = rPinch && lPinch;
 
 #if UNITY_EDITOR
-        // Editor fallback: hold both mouse buttons
         bothPinching = Input.GetMouseButton(0) && Input.GetMouseButton(1);
 #endif
+        bothHandsPinching_ = bothPinching;
 
         if (bothPinching)
         {
             calibrationTimer += Time.deltaTime;
-            calibrationDone = false;
+
+            // Cancel threshold reached — reset regardless of phase
+            if (calibrationTimer >= calibrationCancelTime)
+            {
+                ResetCalibration();
+                ShowCalibrationLabel("Calibration reset — stand at speaker #1", Color.red);
+                Invoke(nameof(HideCalibrationLabel), 2.0f);
+                return;
+            }
 
             float progress = Mathf.Clamp01(calibrationTimer / calibrationHoldTime);
-            ShowCalibrationLabel($"CALIBRATING {Mathf.RoundToInt(progress * 100)}%", Color.yellow);
+
+            if (calibrationPhase == 0)
+                ShowCalibrationLabel($"STEP 1: Speaker #{speakerManager?.calibrationSpeakerIdA}  {Mathf.RoundToInt(progress * 100)}%", Color.yellow);
+            else
+                ShowCalibrationLabel($"STEP 2: Speaker #{speakerManager?.calibrationSpeakerIdB}  {Mathf.RoundToInt(progress * 100)}%  (hold 5s to cancel)", Color.cyan);
 
             if (calibrationTimer >= calibrationHoldTime && !calibrationDone)
             {
-                calibrationDone = true;
+                calibrationDone  = true;
                 calibrationTimer = 0f;
 
-                if (speakerManager != null)
-                    speakerManager.CalibrateToHead();
-
-                ShowCalibrationLabel("CALIBRATED ✓", Color.green);
-                Invoke(nameof(HideCalibrationLabel), 2.0f);
-                Debug.Log("[Calibration] Speaker array aligned to head position.");
+                if (calibrationPhase == 0)
+                {
+                    speakerManager?.CalibrateStep1();
+                    calibrationPhase = 1;
+                    ShowCalibrationLabel($"Step 1 done — walk to speaker #{speakerManager?.calibrationSpeakerIdB}", Color.green);
+                    Invoke(nameof(HideCalibrationLabel), 2.5f);
+                    Debug.Log("[Calibration] Step 1 recorded.");
+                }
+                else
+                {
+                    speakerManager?.CalibrateStep2();
+                    calibrationPhase = 0;
+                    ShowCalibrationLabel("CALIBRATED ✓", Color.green);
+                    Invoke(nameof(HideCalibrationLabel), 2.0f);
+                    Debug.Log("[Calibration] Step 2 done — array aligned.");
+                }
             }
         }
         else
         {
-            if (calibrationTimer > 0f && !calibrationDone)
+            if (calibrationTimer > 0f && !calibrationDone && calibrationPhase == 1)
+                ShowCalibrationLabel($"Walk to speaker #{speakerManager?.calibrationSpeakerIdB}, pinch to finish", Color.cyan);
+            else if (calibrationTimer > 0f && !calibrationDone)
                 HideCalibrationLabel();
+
             calibrationTimer = 0f;
+            calibrationDone  = false;
         }
+    }
+
+    void ResetCalibration()
+    {
+        calibrationPhase = 0;
+        calibrationTimer = 0f;
+        calibrationDone  = false;
+        Debug.Log("[Calibration] Reset to phase 0.");
     }
 
     void ShowCalibrationLabel(string text, Color color)

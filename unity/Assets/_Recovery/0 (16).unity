@@ -312,8 +312,8 @@ MonoBehaviour:
   minRayLength: 0.5
   maxRayLength: 8
   depthSensitivity: 4
-  calibrationReferenceSpeakerId: 13
   calibrationHoldTime: 3
+  calibrationCancelTime: 5
   createIndicatorPrefab: {fileID: 0}
   rightHand: {fileID: 0}
   leftHand: {fileID: 0}
@@ -457,7 +457,8 @@ MonoBehaviour:
   activeMaterial: {fileID: 2100000, guid: 57817b26ea0526745830df59e5d10f1a, type: 2}
   arrayOriginOffset: {x: 0, y: 0, z: 2}
   followHeadMovement: 0
-  calibrationReferenceSpeakerId: 0
+  calibrationSpeakerIdA: 1
+  calibrationSpeakerIdB: 2
   speakerScale: 0.8
   speakerBaseSize: {x: 0.2, y: 0.15, z: 0.2}
   maxHeightMultiplier: 3
